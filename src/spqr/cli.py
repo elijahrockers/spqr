@@ -58,7 +58,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"City:  {city.name}")
         print(f"Pops:  {sum(dd.pops.total() for dd in city.districts):.0f}")
         print(f"Grain: {city.treasury.grain:.0f}  Denarii: {city.treasury.denarii:.0f}")
-        print(f"Garr:  {city.garrison.legionaries} legionaries (training {city.garrison.training:.2f})")
         print(f"Sat:   {d.satisfaction:.2f}  Unrest: {d.pops.unrest:.2f}")
         print(f"Hash:  {digest[:16]}")
         return 0

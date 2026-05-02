@@ -95,14 +95,10 @@ def _render_report(state: GameState) -> Text:
     # Composition
     text.append("Composition\n", style="bold")
     pat = sum(d.pops.patricians for d in city.districts)
-    eq = sum(d.pops.equites for d in city.districts)
     pl = sum(d.pops.plebs for d in city.districts)
-    sl = sum(d.pops.slaves for d in city.districts)
-    total = pat + eq + pl + sl
+    total = pat + pl
     _row(text, "Patricians", f"{pat:6.0f}", "white")
-    _row(text, "Equites",    f"{eq:6.0f}", "white")
     _row(text, "Plebs",      f"{pl:6.0f}", "white")
-    _row(text, "Slaves",     f"{sl:6.0f}", "white")
     text.append(" " * 12 + "─" * 8 + "\n", style="grey50")
     _row(text, "Total",      f"{total:6.0f}", "bright_yellow")
     text.append("\n")
@@ -119,7 +115,7 @@ def _render_report(state: GameState) -> Text:
         assigned += b.workers_assigned
     idle = max(0.0, workforce - assigned)
     _row(text, "Workforce",   f"{workforce:6.0f}", "cyan",
-         "  (eligible: plebs + slaves)")
+         "  (plebs)")
     _row(text, "Worker slots", f"{slots:6d}",      "white")
     _row(text, "Assigned",     f"{assigned:6d}",    "green")
     _row(text, "Idle",         f"{idle:6.0f}",      "yellow")

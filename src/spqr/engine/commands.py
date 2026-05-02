@@ -9,11 +9,10 @@ class ZoneKind(enum.IntEnum):
     designate. Construction systems will fill these out over time."""
     FARM = 0
     INSULA = 1
-    BARRACKS = 2
-    GRANARY = 3
-    WORKSHOP = 4
-    ROAD = 5
-    WAREHOUSE = 6
+    GRANARY = 2
+    WORKSHOP = 3
+    ROAD = 4
+    WAREHOUSE = 5
 
 
 @dataclass(slots=True)

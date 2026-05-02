@@ -4,9 +4,7 @@ import random
 
 import numpy as np
 
-from spqr.sim.models import NeighborSite, Province, RegionBiome, RegionTile, SiteKind
-
-from .names import barbarian_camp_name
+from spqr.sim.models import NeighborSite, Province, RegionBiome, RegionTile
 
 
 REGION_W = 32
@@ -118,28 +116,6 @@ def _pick_city_site(biomes: np.ndarray, rng: random.Random) -> tuple[int, int]:
     return rng.choice(pool)
 
 
-def _place_barbarians(
-    biomes: np.ndarray, city_y: int, city_x: int, rng: random.Random
-) -> list[tuple[int, int]]:
-    """Place 1-2 barbarian camps on edges of the region in non-sea biomes,
-    far enough from the player city."""
-    h, w = biomes.shape
-    candidates: list[tuple[int, int]] = []
-    for y in range(h):
-        for x in range(w):
-            if biomes[y, x] in (RegionBiome.SEA, RegionBiome.RIVER):
-                continue
-            on_edge = y < 2 or y >= h - 2 or x < 2 or x >= w - 2
-            if not on_edge:
-                continue
-            if abs(y - city_y) + abs(x - city_x) < min(h, w) // 2:
-                continue
-            candidates.append((y, x))
-    rng.shuffle(candidates)
-    n = rng.randint(1, 2)
-    return candidates[:n]
-
-
 def generate_region(rng: random.Random) -> tuple[Province, tuple[int, int]]:
     """Generate a region map and return (province, (city_y, city_x)).
 
@@ -152,7 +128,6 @@ def generate_region(rng: random.Random) -> tuple[Province, tuple[int, int]]:
             biomes[y, x] = int(_biome_for(float(elev[y, x])))
     _carve_river(elev, biomes)
     cy, cx = _pick_city_site(biomes, rng)
-    barb_sites = _place_barbarians(biomes, cy, cx, rng)
 
     tiles: list[RegionTile] = []
     for y in range(REGION_H):
@@ -167,52 +142,5 @@ def generate_region(rng: random.Random) -> tuple[Province, tuple[int, int]]:
             )
 
     sites: list[NeighborSite] = []
-    next_site_id = 0
-    for by, bx in barb_sites:
-        site = NeighborSite(
-            id=next_site_id,
-            name=barbarian_camp_name(rng),
-            kind=SiteKind.BARBARIAN_CAMP,
-            region_x=bx,
-            region_y=by,
-            aggression=rng.uniform(0.05, 0.20),
-            strength=rng.randint(8, 18),
-        )
-        sites.append(site)
-        idx = by * REGION_W + bx
-        tiles[idx].site_id = next_site_id
-        next_site_id += 1
-
-    # A simple straight-line road from each barbarian camp to the city site;
-    # marks the path as has_road and provides a route for raid resolution.
-    for site in sites:
-        _draw_road(tiles, REGION_W, REGION_H, site.region_y, site.region_x, cy, cx)
-
     province = Province(width=REGION_W, height=REGION_H, tiles=tiles, sites=sites)
     return province, (cy, cx)
-
-
-def _draw_road(
-    tiles: list[RegionTile], w: int, h: int, y0: int, x0: int, y1: int, x1: int
-) -> None:
-    # Bresenham's line; flag non-sea cells as having a road segment.
-    dy = abs(y1 - y0)
-    dx = abs(x1 - x0)
-    sy = 1 if y0 < y1 else -1
-    sx = 1 if x0 < x1 else -1
-    err = (dx if dx > dy else -dy) // 2
-    y, x = y0, x0
-    while True:
-        if 0 <= y < h and 0 <= x < w:
-            t = tiles[y * w + x]
-            if t.biome != RegionBiome.SEA:
-                t.has_road = True
-        if y == y1 and x == x1:
-            break
-        e = err
-        if e > -dx:
-            err -= dy
-            x += sx
-        if e < dy:
-            err += dx
-            y += sy

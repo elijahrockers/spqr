@@ -5,12 +5,11 @@
   - grain reads workers_assigned to grow crops on farms; runs the harvest,
     transport-to-granary, and per-house consumption pipeline; finally
     syncs treasury.grain as the granary aggregate
-  - economy runs monthly: taxation, garrison upkeep, dole — drains the
-    granaries via grain.drain_treasury_grain
-  - demographics + military + agents + events run last so they observe
-    post-economy state."""
+  - economy runs monthly: taxation and dole — drains the granaries via
+    grain.drain_treasury_grain
+  - demographics runs last so it observes post-economy state."""
 
-from . import agents, construction, economy, events, grain, labor, military, population
+from . import construction, economy, grain, labor, population
 from spqr.engine.tick import System
 
 
@@ -21,9 +20,6 @@ def default_systems() -> list[System]:
         grain.step,
         economy.step,
         population.step,
-        military.step,
-        agents.step,
-        events.step,
     ]
 
 

@@ -14,9 +14,6 @@ PLEB_BIRTH_RATE = 0.012
 PLEB_DEATH_RATE = 0.006
 PATRICIAN_BIRTH_RATE = 0.008
 PATRICIAN_DEATH_RATE = 0.005
-EQUES_BIRTH_RATE = 0.010
-EQUES_DEATH_RATE = 0.005
-SLAVE_DEATH_RATE = 0.012  # higher mortality, no natural increase
 
 
 def step(state: GameState, rng: random.Random) -> None:
@@ -39,15 +36,6 @@ def step(state: GameState, rng: random.Random) -> None:
             new_pat = d.pops.patricians * PATRICIAN_BIRTH_RATE * sat_birth_mod
             lost_pat = d.pops.patricians * PATRICIAN_DEATH_RATE * sat_death_mod
             d.pops.patricians = max(0.0, d.pops.patricians + new_pat - lost_pat)
-
-            # Equites
-            new_eq = d.pops.equites * EQUES_BIRTH_RATE * sat_birth_mod
-            lost_eq = d.pops.equites * EQUES_DEATH_RATE * sat_death_mod
-            d.pops.equites = max(0.0, d.pops.equites + new_eq - lost_eq)
-
-            # Slaves: no natural increase, only mortality and player imports
-            # (imports are out of MVP scope).
-            d.pops.slaves = max(0.0, d.pops.slaves * (1 - SLAVE_DEATH_RATE))
 
             # Migration: high satisfaction attracts plebs, low pushes them out.
             if sat > 0.7:

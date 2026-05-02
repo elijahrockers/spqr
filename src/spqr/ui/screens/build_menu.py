@@ -13,7 +13,6 @@ from spqr.sim.models import BUILDING_COST, BuildingKind
 _ZONE_TO_BUILDING: dict[ZoneKind, BuildingKind] = {
     ZoneKind.FARM: BuildingKind.FARM,
     ZoneKind.INSULA: BuildingKind.INSULA,
-    ZoneKind.BARRACKS: BuildingKind.BARRACKS,
     ZoneKind.GRANARY: BuildingKind.GRANARY,
     ZoneKind.WORKSHOP: BuildingKind.WORKSHOP,
     ZoneKind.ROAD: BuildingKind.ROAD,
@@ -38,11 +37,10 @@ def _cost_string(zone: ZoneKind) -> str:
 _OPTIONS: list[tuple[str, ZoneKind | None, str]] = [
     ("1", ZoneKind.FARM,      "Farm       — produces grain (6 workers)"),
     ("2", ZoneKind.INSULA,    "Insula     — housing for 40 plebs"),
-    ("3", ZoneKind.BARRACKS,  "Barracks   — soldiers, +50 storage"),
-    ("4", ZoneKind.GRANARY,   "Granary    — grain storage (2 workers)"),
-    ("5", ZoneKind.WORKSHOP,  "Workshop   — 4 workers, future goods"),
-    ("6", ZoneKind.ROAD,      "Road       — connects tiles"),
-    ("7", ZoneKind.WAREHOUSE, "Warehouse  — +250 materials storage"),
+    ("3", ZoneKind.GRANARY,   "Granary    — grain storage (2 workers)"),
+    ("4", ZoneKind.WORKSHOP,  "Workshop   — 4 workers, future goods"),
+    ("5", ZoneKind.ROAD,      "Road       — connects tiles"),
+    ("6", ZoneKind.WAREHOUSE, "Warehouse  — +250 materials storage"),
     ("0", None,               "Clear current tool"),
 ]
 
@@ -76,7 +74,6 @@ class BuildMenuScreen(ModalScreen[ZoneKind | None]):
         Binding("4", "pick('4')", show=False),
         Binding("5", "pick('5')", show=False),
         Binding("6", "pick('6')", show=False),
-        Binding("7", "pick('7')", show=False),
         Binding("0", "pick('0')", show=False),
     ]
 

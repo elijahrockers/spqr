@@ -12,19 +12,16 @@ from textual.widget import Widget
 from spqr.engine.world import GameState
 from spqr.sim.models import (
     BUILDER_SLOTS,
-    GRAIN_PER_LEGIONARY_MEAL,
     GRAIN_PER_MEAL,
     GRAIN_YIELD_PER_HARVEST,
     GRANARY_CAPACITY,
     GROWING_SEASON_MONTHS,
     HOUSING_CAPACITY,
-    LEGIONARY_MEAL_INTERVAL_HOURS,
     MEAL_INTERVAL_HOURS,
     STORAGE_CAPACITY,
     WORKER_SLOTS,
     BuildingKind,
     City,
-    hours_until_legionary_meal,
     hours_until_next_meal,
 )
 
@@ -131,8 +128,6 @@ def _render_building(city: City, x: int, y: int, current_month: int, current_tic
             _render_granary_grain(text, b)
         if b.kind in (BuildingKind.INSULA, BuildingKind.DOMUS):
             _render_house_meals(text, city, b, current_tick)
-        if b.kind == BuildingKind.BARRACKS:
-            _render_barracks_meals(text, city, b, current_tick)
 
     district = _district_for_building(city, b.id)
     if district is not None:
@@ -194,19 +189,16 @@ def _render_house_meals(text: Text, city: City, b, current_tick: int) -> None:  
     else:
         text.append("none in range", style="red")
         text.append(" (residents starve)\n", style="grey50")
-    # Two resident classes per house kind. Show each meal schedule.
     if b.kind == BuildingKind.INSULA:
         text.append("Residents:  ", style="grey70")
-        text.append(f"plebs + slaves (×{HOUSING_CAPACITY[b.kind]})\n", style="white")
-        _render_meal_line(text, "Pleb",  1, current_tick)
-        _render_meal_line(text, "Slave", 0, current_tick)
+        text.append(f"plebs (×{HOUSING_CAPACITY[b.kind]})\n", style="white")
+        _render_meal_line(text, "Pleb", 0, current_tick)
     elif b.kind == BuildingKind.DOMUS:
         text.append("Residents:  ", style="grey70")
         text.append(
-            f"equites + patricians (×{HOUSING_CAPACITY[b.kind]})\n", style="white"
+            f"patricians (×{HOUSING_CAPACITY[b.kind]})\n", style="white"
         )
-        _render_meal_line(text, "Equ",   2, current_tick)
-        _render_meal_line(text, "Pat",   3, current_tick)
+        _render_meal_line(text, "Pat", 1, current_tick)
 
 
 def _render_meal_line(text: Text, label: str, cls: int, current_tick: int) -> None:
@@ -220,40 +212,6 @@ def _render_meal_line(text: Text, label: str, cls: int, current_tick: int) -> No
         text.append(f"in {until:>2}h", style="cyan")
     text.append(
         f"  ({per_meal:.2f}g, every {interval}h)\n", style="grey50"
-    )
-
-
-def _render_barracks_meals(text: Text, city: City, b, current_tick: int) -> None:  # type: ignore[no-untyped-def]
-    from spqr.sim.systems.spatial import coverage
-    from spqr.sim.models import GRANARY_REACH_COST
-
-    in_range_count = 0
-    in_range_grain = 0.0
-    for g in city.buildings:
-        if g.kind != BuildingKind.GRANARY or g.completion < 1.0:
-            continue
-        cov = coverage(city, g.x, g.y, GRANARY_REACH_COST)
-        if (b.x, b.y) in cov:
-            in_range_count += 1
-            in_range_grain += g.grain_stored
-    text.append("Granaries:  ", style="grey70")
-    if in_range_count > 0:
-        text.append(f"{in_range_count} in range", style="green")
-        text.append(f" ({in_range_grain:.0f} grain)\n", style="grey50")
-    else:
-        text.append("none in range", style="red")
-        text.append(" (soldiers starve)\n", style="grey50")
-    text.append("Garrison:   ", style="grey70")
-    text.append(f"{city.garrison.legionaries} legionaries\n", style="red")
-    until = hours_until_legionary_meal(current_tick)
-    text.append("Mess:       ", style="grey70")
-    if until == 0:
-        text.append("now", style="bright_yellow")
-    else:
-        text.append(f"in {until:>2}h", style="cyan")
-    text.append(
-        f"  ({GRAIN_PER_LEGIONARY_MEAL:.2f}g, every {LEGIONARY_MEAL_INTERVAL_HOURS}h)\n",
-        style="grey50",
     )
 
 

@@ -5,6 +5,64 @@ new entries on top.
 
 ---
 
+## 2026-05-02 — MVP simplification: peaceful builder, two-tier population
+
+Cut the agents and military layers entirely so MVP focuses on pool-based
+demographics and peaceful building. Schema bumped to v2; old saves fail
+loudly per the existing invariant.
+
+### Changes
+- `PopClass` reduced from {SLAVE, PLEB, EQUES, PATRICIAN} to {PLEB,
+  PATRICIAN}; `PopPool` fields collapse to `plebs / patricians / unrest`.
+  Meal dicts re-keyed to `0=PLEB, 1=PATRICIAN`.
+- Deleted `sim/systems/agents.py`, `sim/systems/military.py`, and
+  `sim/systems/events.py` (events.py was 100% raid-driven). Default
+  system list shrinks to labor → construction → grain → economy →
+  population.
+- Deleted `Citizen` / `CitizenRole` model and `GarrisonState`. `City`
+  drops `citizens` / `next_citizen_id` / `garrison`.
+- Removed `BuildingKind.BARRACKS` (and its housing/cost/storage entries),
+  `LEGIONARY_*` constants, `hours_until_legionary_meal`, the legionary
+  branch in `grain._consume`, and the garrison-upkeep block in
+  `economy.step`. Tax brackets simplified: just plebs and patricians (8x).
+- Region procgen drops `_place_barbarians` and the barbarian-camp →
+  city Bresenham road. `SiteKind.BARBARIAN_CAMP` removed; only
+  PLAYER_CITY left in the enum. `NeighborSite` loses `aggression` /
+  `strength`. Province now only ever contains the player's own site.
+- UI cleanup: dropped the `[3] Barracks` build-menu entry, the `legion N`
+  status-bar field, the BARRACKS map glyph, the BARBARIAN_CAMP region
+  glyph, and the slave/eques rows in the population screen.
+
+### What worked
+- The schema-version invariant did its job: old saves are rejected on
+  load because `SCHEMA_VERSION` bumped to 2; no migration code needed.
+- Determinism preserved end-to-end. After all the procgen/system cuts,
+  `--headless --seed 42 --ticks 1000 --hash-only` is stable across runs
+  (`b25897fb…`). The hash naturally differs from the pre-cut value, but
+  reproducibility is what matters.
+- Re-keying `MEAL_*` dicts to the new `PopClass` ordinals (PLEB=0,
+  PATRICIAN=1) was clean because `int(PopClass.X)` is the lookup key
+  everywhere — only 5-line edit in `building.py` plus the iteration
+  tuple in `grain._consume`.
+
+### What didn't / lessons
+- Two `test_grain` / `test_population` tests broke because the procgen
+  RNG sequence shifted (no more BARRACKS placement → insulae land in
+  different tiles). With the new layout only 2 of 4 insulae sat in the
+  starter granary's reach, so meal demand was half-served and
+  satisfaction crashed. Lesson: tests that depend on procgen layout for
+  spatial-reach behavior are brittle — fixed by stripping insulae from
+  the district's `building_ids` so meals fall back to
+  `_drain_any_granary` (location-independent). For future tests
+  involving meals, prefer the fallback path unless you're explicitly
+  testing reach.
+- Killing barbarians removed the only consumer of the `events` system,
+  so `events.py` went too. If we add fires / plagues / festivals later,
+  they slot back in at the same point in the system order with the
+  same monthly-tick cadence.
+
+---
+
 ## 2026-04-25 — Advanced (i)nfo: granary range highlight + inventory graph
 
 Added an `i` hotkey on the main view that opens an `InfoScreen` for the

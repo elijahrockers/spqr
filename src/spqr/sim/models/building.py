@@ -14,22 +14,20 @@ class BuildingKind(enum.IntEnum):
     DOMUS = 3        # patrician housing
     FARM = 4
     GRANARY = 5
-    BARRACKS = 6
-    WORKSHOP = 7
-    TEMPLE = 8
-    ROAD = 9
-    WAREHOUSE = 10   # general materials storage
+    WORKSHOP = 6
+    TEMPLE = 7
+    ROAD = 8
+    WAREHOUSE = 9    # general materials storage
 
 
 # Capacity in housing units (people housed) by building kind.
 HOUSING_CAPACITY: dict[BuildingKind, int] = {
     BuildingKind.INSULA: 40,
     BuildingKind.DOMUS: 8,
-    BuildingKind.BARRACKS: 30,
 }
 
 # Worker slots an *operational* building draws from the labor pool. A farm
-# with no workers grows nothing; barracks/insulae/domus/temple/road/warehouse
+# with no workers grows nothing; insulae/domus/temple/road/warehouse
 # don't draw operational labor (they're housing or passive infrastructure).
 WORKER_SLOTS: dict[BuildingKind, int] = {
     BuildingKind.FARM: 6,
@@ -47,7 +45,6 @@ BUILDER_SLOTS: dict[BuildingKind, int] = {
     BuildingKind.INSULA: 2,
     BuildingKind.WORKSHOP: 2,
     BuildingKind.WAREHOUSE: 2,
-    BuildingKind.BARRACKS: 3,
     BuildingKind.DOMUS: 3,
     BuildingKind.FORUM: 4,
     BuildingKind.TEMPLE: 4,
@@ -63,7 +60,6 @@ BUILD_HOURS: dict[BuildingKind, int] = {
     BuildingKind.INSULA: 240,
     BuildingKind.WORKSHOP: 240,
     BuildingKind.WAREHOUSE: 300,
-    BuildingKind.BARRACKS: 300,
     BuildingKind.DOMUS: 360,
     BuildingKind.FORUM: 600,
     BuildingKind.TEMPLE: 720,
@@ -79,7 +75,6 @@ BUILDING_COST: dict[BuildingKind, Resources] = {
     BuildingKind.INSULA:   Resources(denarii=50,  timber=20, stone=10, grain=0),
     BuildingKind.WORKSHOP: Resources(denarii=60,  timber=15, stone=10, grain=0),
     BuildingKind.WAREHOUSE:Resources(denarii=80,  timber=20, stone=20, grain=0),
-    BuildingKind.BARRACKS: Resources(denarii=80,  timber=15, stone=20, grain=0),
     BuildingKind.DOMUS:    Resources(denarii=100, timber=20, stone=30, grain=0),
     BuildingKind.TEMPLE:   Resources(denarii=150, timber=20, stone=40, grain=0),
     BuildingKind.FORUM:    Resources(denarii=200, timber=30, stone=50, grain=0),
@@ -91,7 +86,6 @@ BUILDING_COST: dict[BuildingKind, Resources] = {
 # produced, so the cap doesn't bite during play yet).
 STORAGE_CAPACITY: dict[BuildingKind, int] = {
     BuildingKind.FORUM: 100,      # mayor's office stockpile
-    BuildingKind.BARRACKS: 50,    # garrison reserve
     BuildingKind.WAREHOUSE: 250,  # general storage
 }
 
@@ -139,49 +133,31 @@ FARM_TRANSPORT_REACH_COST: float = 16.0
 # Per-class meal mechanics. Meals are discrete events scheduled by tick:
 # class C eats when `(tick - MEAL_OFFSET_HOURS[C]) % MEAL_INTERVAL_HOURS[C]
 # == 0`. Per-meal grain is calibrated so the daily total per individual
-# matches the original continuous hourly rates (slaves 0.010/h,
-# plebs 0.020/h, equites 0.040/h, patricians 0.050/h).
+# matches the original continuous hourly rates (plebs 0.020/h,
+# patricians 0.050/h).
 
-# Indexes match PopClass IntEnum values.
+# Indexes match PopClass IntEnum values (PLEB=0, PATRICIAN=1).
 MEAL_INTERVAL_HOURS: dict[int, int] = {
-    0: 48,   # SLAVE: every 2 days
-    1: 24,   # PLEB: once a day
-    2: 12,   # EQUES: twice a day
-    3: 12,   # PATRICIAN: twice a day
+    0: 24,   # PLEB: once a day
+    1: 12,   # PATRICIAN: twice a day
 }
 
 # Offset within the period — staggers the daily rhythm.
 MEAL_OFFSET_HOURS: dict[int, int] = {
-    0: 5,    # slaves 5am every other day
-    1: 6,    # plebs 6am daily
-    2: 7,    # equites 7am, 7pm
-    3: 9,    # patricians 9am, 9pm
+    0: 6,    # plebs 6am daily
+    1: 9,    # patricians 9am, 9pm
 }
 
 GRAIN_PER_MEAL: dict[int, float] = {
-    0: 0.48,  # slave: 0.48 every 48h = 0.010/h average
-    1: 0.48,  # pleb: 0.48 every 24h = 0.020/h
-    2: 0.48,  # eques: 0.48 every 12h = 0.040/h
-    3: 0.60,  # patrician: 0.60 every 12h = 0.050/h
+    0: 0.48,  # pleb: 0.48 every 24h = 0.020/h
+    1: 0.60,  # patrician: 0.60 every 12h = 0.050/h
 }
 
-# Each civilian class is housed in exactly one BuildingKind. Slaves bunk
-# with plebs in insulae; equites and patricians live in domus.
-CLASS_HOUSING: dict[int, "BuildingKind"] = {}  # filled below to break enum cycle
-
-
-# Soldiers eat from granaries serving their barracks twice a day.
-LEGIONARY_MEAL_INTERVAL_HOURS: int = 12
-LEGIONARY_MEAL_OFFSET_HOURS: int = 6
-GRAIN_PER_LEGIONARY_MEAL: float = 0.20
-
-
-CLASS_HOUSING.update({
-    0: BuildingKind.INSULA,   # SLAVE
-    1: BuildingKind.INSULA,   # PLEB
-    2: BuildingKind.DOMUS,    # EQUES
-    3: BuildingKind.DOMUS,    # PATRICIAN
-})
+# Each civilian class is housed in exactly one BuildingKind.
+CLASS_HOUSING: dict[int, "BuildingKind"] = {
+    0: BuildingKind.INSULA,   # PLEB
+    1: BuildingKind.DOMUS,    # PATRICIAN
+}
 
 
 def hours_until_next_meal(tick: int, cls: int) -> int:
@@ -191,11 +167,6 @@ def hours_until_next_meal(tick: int, cls: int) -> int:
     offset = MEAL_OFFSET_HOURS[cls]
     elapsed = (tick - offset) % interval
     return 0 if elapsed == 0 else interval - elapsed
-
-
-def hours_until_legionary_meal(tick: int) -> int:
-    elapsed = (tick - LEGIONARY_MEAL_OFFSET_HOURS) % LEGIONARY_MEAL_INTERVAL_HOURS
-    return 0 if elapsed == 0 else LEGIONARY_MEAL_INTERVAL_HOURS - elapsed
 
 
 class Building(msgspec.Struct, frozen=False):

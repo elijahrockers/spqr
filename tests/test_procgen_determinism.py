@@ -14,14 +14,12 @@ def test_different_seeds_diverge():
     assert a != b
 
 
-def test_generated_world_has_player_city_and_at_least_one_neighbor():
+def test_generated_world_has_player_city():
     state = new_game(seed=42)
     city = state.player_city()
     assert city.name
     assert len(city.buildings) >= 5
     assert len(city.districts) == 1
-    # Province must contain the player city as a site, plus at least one neighbor.
     kinds = {s.kind for s in state.province.sites}
     from spqr.sim.models import SiteKind
     assert SiteKind.PLAYER_CITY in kinds
-    assert SiteKind.BARBARIAN_CAMP in kinds

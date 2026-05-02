@@ -9,8 +9,7 @@ from .tile import RegionTile
 
 class SiteKind(enum.IntEnum):
     PLAYER_CITY = 0
-    BARBARIAN_CAMP = 1
-    ALLIED_VILLAGE = 2
+    ALLIED_VILLAGE = 1
 
 
 class NeighborSite(msgspec.Struct, frozen=False):
@@ -19,10 +18,6 @@ class NeighborSite(msgspec.Struct, frozen=False):
     kind: SiteKind
     region_x: int
     region_y: int
-    # For barbarian camps: aggression 0.0..1.0 — chance per month of raid attempt.
-    aggression: float = 0.0
-    # Strength is a coarse military rating used to resolve raids.
-    strength: int = 0
 
 
 class Province(msgspec.Struct, frozen=False):

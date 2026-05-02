@@ -3,18 +3,9 @@ from __future__ import annotations
 import msgspec
 
 from .building import Building
-from .citizen import Citizen
 from .district import District
 from .resources import Resources
 from .tile import CityTile
-
-
-class GarrisonState(msgspec.Struct, frozen=False):
-    """Aggregate military presence stationed in this city."""
-    legionaries: int = 0
-    auxiliaries: int = 0
-    # Average training level 0.0 .. 1.0; soldiers train when in barracks.
-    training: float = 0.0
 
 
 class City(msgspec.Struct, frozen=False):
@@ -30,10 +21,7 @@ class City(msgspec.Struct, frozen=False):
     buildings: list[Building] = msgspec.field(default_factory=list)
     next_building_id: int = 0
     districts: list[District] = msgspec.field(default_factory=list)
-    citizens: list[Citizen] = msgspec.field(default_factory=list)
-    next_citizen_id: int = 0
     treasury: Resources = msgspec.field(default_factory=Resources)
-    garrison: GarrisonState = msgspec.field(default_factory=GarrisonState)
     # Player policy knobs; persisted with the city, mutated through commands.
     tax_rate: float = 0.10
     grain_dole_per_pleb: float = 0.5

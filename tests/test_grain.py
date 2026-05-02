@@ -111,68 +111,37 @@ def test_meal_event_fires_only_on_scheduled_tick():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
     city = state.player_city()
+    # Strip insulae/domus from the district so meal demand uses the
+    # `_drain_any_granary` fallback rather than depending on which houses
+    # happen to land in granary range with this seed.
+    d = city.districts[0]
+    d.building_ids = [
+        b_id for b_id in d.building_ids
+        if city.buildings[b_id].kind not in (BuildingKind.INSULA, BuildingKind.DOMUS)
+    ]
     granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
     # Engine increments tick before running systems. To have systems see
     # tick==6 (the pleb meal), step until tick==5 then step once more.
     while state.tick < 5:
         eng.step(1)
     grain_before = granary.grain_stored
-    eng.step(1)  # advances tick 5 -> 6; pleb AND legionary meals fire
+    eng.step(1)  # advances tick 5 -> 6; pleb meal fires
     drop_at_meal = grain_before - granary.grain_stored
-    # Tick 6 fires the pleb meal (interval 24, offset 6) and the legionary
-    # meal (interval 12, offset 6). Slaves (offset 5) and equites (offset 7)
-    # do not fire here.
-    from spqr.sim.models import GRAIN_PER_LEGIONARY_MEAL
-    pleb_count = city.districts[0].pops.plebs
-    legionaries = city.garrison.legionaries
-    expected = pleb_count * 0.48 + legionaries * GRAIN_PER_LEGIONARY_MEAL
+    # Tick 6 fires only the pleb meal (interval 24, offset 6).
+    pleb_count = d.pops.plebs
+    expected = pleb_count * 0.48
     assert abs(drop_at_meal - expected) < 0.5, (
-        f"expected ~{expected:.2f} drop on pleb+legionary meal tick, "
+        f"expected ~{expected:.2f} drop on pleb meal tick, "
         f"got {drop_at_meal:.2f}"
     )
-    # Step to tick 8 (no class has a meal scheduled at hour 8).
-    grain_quiet = granary.grain_stored
-    eng.step(1)  # 6 -> 7; equites would have fired at tick 7
-    eng.step(1)  # 7 -> 8; quiet
-    # Compare just the last quiet tick.
-    grain_8 = granary.grain_stored
-    eng.step(1)  # 8 -> 9; patrician meal
-    eng.step(1)  # 9 -> 10; quiet
-    drop_quiet = grain_8 - granary.grain_stored  # net over 9 -> 10? not great
-    # Just verify there exist quiet ticks: at least one of these consecutive
-    # non-meal steps caused no drop.
+    # Tick 11 should be quiet — no class has a meal scheduled.
+    while state.tick < 10:
+        eng.step(1)
     grain_a = granary.grain_stored
     eng.step(1)  # 10 -> 11; quiet
     grain_b = granary.grain_stored
     assert grain_a == grain_b, (
         f"expected zero drop at tick 11 (quiet hour), got {grain_a - grain_b}"
-    )
-
-
-def test_legionary_meal_drains_granary():
-    """Legionaries should consume `0.20 * count` per meal at the 12-hour
-    cadence. Verify by emptying everything except the soldier meal demand."""
-    from spqr.sim.models import GRAIN_PER_LEGIONARY_MEAL
-
-    state = new_game(seed=42)
-    eng = Engine(state, default_systems())
-    city = state.player_city()
-    # Empty pop and granary, leave only legionaries.
-    for d in city.districts:
-        d.pops.slaves = d.pops.plebs = d.pops.equites = d.pops.patricians = 0.0
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
-    granary.grain_stored = 1000.0
-    # Engine increments tick before systems run; meal at tick==6 fires
-    # during the 5->6 step. Stop one short of the meal tick.
-    while state.tick < 5:
-        eng.step(1)
-    grain_before = granary.grain_stored
-    legionaries = city.garrison.legionaries
-    eng.step(1)  # 5 -> 6; legionary meal fires
-    drop = grain_before - granary.grain_stored
-    expected = legionaries * GRAIN_PER_LEGIONARY_MEAL
-    assert abs(drop - expected) < 0.01, (
-        f"expected {expected} drop on legionary meal tick, got {drop}"
     )
 
 

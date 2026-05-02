@@ -6,7 +6,6 @@ from .building import (
     FARM_GRAIN_CAPACITY,
     FARM_TRANSPORT_REACH_COST,
     FARM_WORKER_HOURS_PER_HARVEST,
-    GRAIN_PER_LEGIONARY_MEAL,
     GRAIN_PER_MEAL,
     GRAIN_TRANSPORT_RATE,
     GRAIN_YIELD_PER_HARVEST,
@@ -15,19 +14,15 @@ from .building import (
     GRANARY_REACH_COST,
     GROWING_SEASON_MONTHS,
     HOUSING_CAPACITY,
-    LEGIONARY_MEAL_INTERVAL_HOURS,
-    LEGIONARY_MEAL_OFFSET_HOURS,
     MEAL_INTERVAL_HOURS,
     MEAL_OFFSET_HOURS,
     STORAGE_CAPACITY,
     WORKER_SLOTS,
     Building,
     BuildingKind,
-    hours_until_legionary_meal,
     hours_until_next_meal,
 )
-from .citizen import Citizen, CitizenRole
-from .city import City, GarrisonState
+from .city import City
 from .district import District
 from .population import PopClass, PopPool
 from .province import NeighborSite, Province, SiteKind
@@ -44,7 +39,6 @@ __all__ = [
     "FARM_GRAIN_CAPACITY",
     "FARM_TRANSPORT_REACH_COST",
     "FARM_WORKER_HOURS_PER_HARVEST",
-    "GRAIN_PER_LEGIONARY_MEAL",
     "GRAIN_PER_MEAL",
     "GRAIN_TRANSPORT_RATE",
     "GRAIN_YIELD_PER_HARVEST",
@@ -52,19 +46,13 @@ __all__ = [
     "GRANARY_HISTORY_MAX_SAMPLES",
     "GRANARY_REACH_COST",
     "GROWING_SEASON_MONTHS",
-    "LEGIONARY_MEAL_INTERVAL_HOURS",
-    "LEGIONARY_MEAL_OFFSET_HOURS",
     "MEAL_INTERVAL_HOURS",
     "MEAL_OFFSET_HOURS",
-    "hours_until_legionary_meal",
     "hours_until_next_meal",
-    "Citizen",
-    "CitizenRole",
     "City",
     "CityTerrain",
     "CityTile",
     "District",
-    "GarrisonState",
     "HOUSING_CAPACITY",
     "NeighborSite",
     "PopClass",

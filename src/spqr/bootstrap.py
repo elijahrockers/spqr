@@ -10,7 +10,7 @@ from spqr.engine.events import LogSeverity, push_log
 from spqr.engine.rng import RngState, make_rng
 from spqr.engine.world import GameState
 from spqr.persistence.schema import SCHEMA_VERSION
-from spqr.sim.models import SiteKind
+from spqr.sim.models import NeighborSite, SiteKind
 from spqr.world.procgen.region import generate_region
 from spqr.world.procgen.city import generate_city
 
@@ -21,8 +21,6 @@ def new_game(seed: int) -> GameState:
     city = generate_city(rng, region_x=city_x, region_y=city_y, city_id=0)
 
     # Register the city as a site on the province for region-view rendering.
-    from spqr.sim.models import NeighborSite
-
     site_id = len(province.sites)
     province.sites.append(
         NeighborSite(
@@ -31,8 +29,6 @@ def new_game(seed: int) -> GameState:
             kind=SiteKind.PLAYER_CITY,
             region_x=city_x,
             region_y=city_y,
-            aggression=0.0,
-            strength=city.garrison.legionaries,
         )
     )
     province.tiles[city_y * province.width + city_x].site_id = site_id

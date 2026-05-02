@@ -15,11 +15,13 @@ substantive change.
   ui,persistence}`; tests in `tests/`.
 
 ## Commands
+- First-time setup: `python3.12 -m venv .venv && source .venv/bin/activate
+  && pip install -e ".[dev]"`.
 - Activate venv: `source .venv/bin/activate` (or use `.venv/bin/python`).
 - Run TUI: `python -m spqr` (or `--seed N`, `--load PATH`).
 - Headless: `python -m spqr --headless --seed 42 --ticks 5000`.
 - State hash for determinism check: `... --hash-only`.
-- Tests: `pytest`.
+- Tests: `pytest` (single test: `pytest tests/test_grain.py::test_name`).
 
 ## Invariants — do not break
 - **All mutable state lives on `GameState`** (`engine/world.py`). Off-tree
@@ -29,9 +31,18 @@ substantive change.
   Same seed + same command sequence ⇒ identical state hash.
 - **One tick = one in-game hour.** Time constants in `engine/world.py`
   (`HOURS_PER_DAY`, `HOURS_PER_MONTH`, `HOURS_PER_YEAR`).
-- **System order matters** (`sim/systems/__init__.py`): construction →
-  labor → economy → population → military → agents → events.
+- **System order matters** (`sim/systems/__init__.py`): labor →
+  construction → grain → economy → population. Labor must run first so
+  `workers_assigned` is set before any consumer reads it; `grain` runs
+  the full food pipeline (farm growth, cart-to-granary, scheduled meals,
+  treasury aggregate sync) and must precede `economy`, which drains
+  granaries for the dole.
   Adding a new system: think about which side of `economy` it belongs.
+- **Granary reach is a Dijkstra cost-12 walk** computed in
+  `sim/systems/spatial.py::coverage`. The same primitive backs both the
+  grain pipeline and the `i` info-screen range highlight — never
+  reimplement it in the UI, or the highlight will silently drift from
+  what the simulation uses.
 - **`msgspec.Struct` typed fields**: construct with the declared type.
   An `int` passed to a `float` field will silently round-trip-coerce and
   break encode-byte-stability (see JOURNAL 2026-04-25).

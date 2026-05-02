@@ -134,7 +134,6 @@ def test_construction_stalls_without_workforce():
     # Drain pop so there are no workers left after operational allocation.
     for d in city.districts:
         d.pops.plebs = 0.0
-        d.pops.slaves = 0.0
     # Find empty grass to designate.
     spot = None
     for y in range(city.height):
@@ -180,9 +179,9 @@ def test_total_storage_capacity_grows_when_warehouse_completes():
 
     state = new_game(seed=5)
     city = state.player_city()
-    # Starter buildings: forum (100) + barracks (50) = 150 total storage.
+    # Starter buildings: forum (100) is the only storage-bearing.
     base_cap = total_storage_capacity(city)
-    assert base_cap == 150
+    assert base_cap == 100
     eng = Engine(state, default_systems())
     # Find empty spot and grant materials.
     city.treasury.denarii = 10_000.0

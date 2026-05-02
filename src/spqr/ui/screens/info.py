@@ -149,12 +149,11 @@ def _render_granary_info(state: GameState, city: City, b) -> Text:  # type: igno
     ]
     insulae = sum(1 for ob in served if ob.kind == BuildingKind.INSULA)
     domus = sum(1 for ob in served if ob.kind == BuildingKind.DOMUS)
-    barracks = sum(1 for ob in served if ob.kind == BuildingKind.BARRACKS)
     farms = sum(1 for ob in served if ob.kind == BuildingKind.FARM)
     text.append(f"  Reach:       {len(cov)} tiles\n", style="grey70")
     text.append(f"  Serves:      ", style="grey70")
     text.append(
-        f"{insulae} insulae · {domus} domus · {barracks} barracks · {farms} farms\n",
+        f"{insulae} insulae · {domus} domus · {farms} farms\n",
         style="white",
     )
 

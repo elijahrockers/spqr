@@ -42,7 +42,6 @@ BUILDING_GLYPH: dict[BuildingKind, tuple[str, str]] = {
     BuildingKind.DOMUS: ("H", "bright_white"),
     BuildingKind.FARM: ("f", "yellow"),
     BuildingKind.GRANARY: ("G", "yellow"),
-    BuildingKind.BARRACKS: ("B", "red"),
     BuildingKind.WORKSHOP: ("W", "cyan"),
     BuildingKind.TEMPLE: ("t", "bright_yellow"),
     BuildingKind.ROAD: ("=", "grey70"),
@@ -187,9 +186,6 @@ def _render_region(province: Province) -> Text:
             kind = site_lookup.get((y, x))
             if kind == SiteKind.PLAYER_CITY:
                 text.append("@", style=Style(color="bright_yellow", bold=True))
-                continue
-            if kind == SiteKind.BARBARIAN_CAMP:
-                text.append("X", style=Style(color="red", bold=True))
                 continue
             if tile.has_road:
                 text.append("=", style=Style(color="grey70"))

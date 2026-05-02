@@ -10,15 +10,12 @@ from spqr.sim.models import (
     City,
     CityTerrain,
     CityTile,
-    Citizen,
-    CitizenRole,
     District,
-    GarrisonState,
     PopPool,
     Resources,
 )
 
-from .names import city_name, roman_name
+from .names import city_name
 
 
 CITY_W = 60
@@ -101,12 +98,11 @@ def generate_city(
         # Grain is the cached aggregate of granary inventories; the actual
         # starter stockpile is set on the granary below.
         treasury=Resources(grain=0.0, denarii=500.0, timber=80.0, stone=40.0),
-        garrison=GarrisonState(legionaries=10, auxiliaries=0, training=0.4),
     )
 
     # One starting district that owns the initial pop pool. Later milestones
     # will subdivide districts as the city grows.
-    pops = PopPool(slaves=10.0, plebs=50.0, equites=4.0, patricians=1.0)
+    pops = PopPool(plebs=50.0, patricians=1.0)
     district = District(id=0, name="Centrum", pops=pops, satisfaction=0.6)
     city.districts.append(district)
 
@@ -136,7 +132,6 @@ def generate_city(
     place(BuildingKind.FORUM)
     for _ in range(4):
         place(BuildingKind.INSULA)
-    place(BuildingKind.BARRACKS)
     for _ in range(3):
         place(BuildingKind.FARM)
     starter_granary = place(BuildingKind.GRANARY)
@@ -147,19 +142,5 @@ def generate_city(
         # safety margin.
         starter_granary.grain_stored = 2500.0
         city.treasury.grain = 2500.0
-
-    # Seed one named magistrate as the inaugural agent.
-    magistrate = Citizen(
-        id=city.next_citizen_id,
-        name=roman_name(rng),
-        role=CitizenRole.MAGISTRATE,
-        age=rng.randint(35, 55),
-        ambition=rng.uniform(-0.3, 0.7),
-        competence=rng.uniform(0.0, 0.8),
-        piety=rng.uniform(-0.2, 0.6),
-        role_since_tick=0,
-    )
-    city.next_citizen_id += 1
-    city.citizens.append(magistrate)
 
     return city

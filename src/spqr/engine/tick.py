@@ -39,7 +39,6 @@ class System(Protocol):
 _ZONE_TO_BUILDING: dict[ZoneKind, BuildingKind] = {
     ZoneKind.FARM: BuildingKind.FARM,
     ZoneKind.INSULA: BuildingKind.INSULA,
-    ZoneKind.BARRACKS: BuildingKind.BARRACKS,
     ZoneKind.GRANARY: BuildingKind.GRANARY,
     ZoneKind.WORKSHOP: BuildingKind.WORKSHOP,
     ZoneKind.ROAD: BuildingKind.ROAD,

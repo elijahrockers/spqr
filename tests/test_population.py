@@ -9,9 +9,17 @@ def test_pops_grow_with_high_satisfaction():
     eng = Engine(state, default_systems())
     city = state.player_city()
     d = city.districts[0]
-    # Force high satisfaction and large grain stockpile to simulate a flush city.
+    # Force high satisfaction. Strip houses from the district and stockpile
+    # every granary so meals always succeed via the `_drain_any_granary`
+    # fallback — sidesteps any layout-dependent spatial-reach gaps.
     d.satisfaction = 0.95
-    city.treasury.grain = 100_000.0
+    d.building_ids = [
+        b_id for b_id in d.building_ids
+        if city.buildings[b_id].kind.name not in ("INSULA", "DOMUS")
+    ]
+    for b in city.buildings:
+        if b.kind.name == "GRANARY":
+            b.grain_stored = 50_000.0
     initial = d.pops.plebs
     eng.step(HOURS_PER_MONTH * 3)
     assert d.pops.plebs > initial

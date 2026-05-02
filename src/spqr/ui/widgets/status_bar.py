@@ -48,7 +48,6 @@ class StatusBar(Widget):
             f"[yellow]grain {city.treasury.grain:6.0f}[/]  "
             f"[bright_yellow]den {city.treasury.denarii:6.0f}[/]  "
             f"[cyan]pop {pops:5.0f}[/]  "
-            f"[red]legion {city.garrison.legionaries}[/]  "
             f"speed [{('red' if s.speed == Speed.PAUSED else 'green')}]{SPEED_LABEL[s.speed]}[/]  "
             f"tool [magenta]{tool}[/]"
         )

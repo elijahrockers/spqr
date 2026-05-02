@@ -1,10 +1,9 @@
-"""Economy: monthly taxation, garrison upkeep, grain dole.
+"""Economy: monthly taxation and grain dole.
 
-Hourly grain flow now lives in `grain.py` (seasonal growth, transport,
-per-house consumption). Economy stays focused on the periodic, city-wide
+Hourly grain flow lives in `grain.py` (seasonal growth, transport, per-
+house consumption). Economy stays focused on the periodic, city-wide
 denominator-of-money side: pulling tax revenue every month and paying the
-recurring obligations (soldiers, dole) by drawing from the granary
-network."""
+recurring obligations (dole) by drawing from the granary network."""
 
 from __future__ import annotations
 
@@ -16,13 +15,9 @@ from spqr.engine.world import HOURS_PER_MONTH, GameState
 from .grain import drain_treasury_grain
 
 
-# Monthly tax in denarii per pleb at tax_rate=1.0. Equites and patricians
-# pay multiples (3x and 8x respectively) — they have wider tax bases.
+# Monthly tax in denarii per pleb at tax_rate=1.0. Patricians pay 8x —
+# they have a wider tax base.
 TAX_PER_PLEB_AT_FULL_RATE = 5.0
-
-# Monthly garrison upkeep — denarii only. Grain rations are charged per
-# meal in grain.py (twice daily, see GRAIN_PER_LEGIONARY_MEAL).
-DENARII_PER_LEGIONARY_MONTH = 1.0
 
 
 def step(state: GameState, rng: random.Random) -> None:
@@ -36,11 +31,9 @@ def step(state: GameState, rng: random.Random) -> None:
 def _apply_monthly(state: GameState, city) -> None:  # type: ignore[no-untyped-def]
     # Taxation
     plebs_total = sum(d.pops.plebs for d in city.districts)
-    eq_total = sum(d.pops.equites for d in city.districts)
     pat_total = sum(d.pops.patricians for d in city.districts)
     revenue = (
         plebs_total * TAX_PER_PLEB_AT_FULL_RATE * city.tax_rate
-        + eq_total * TAX_PER_PLEB_AT_FULL_RATE * city.tax_rate * 3
         + pat_total * TAX_PER_PLEB_AT_FULL_RATE * city.tax_rate * 8
     )
     city.treasury.denarii += revenue
@@ -60,19 +53,3 @@ def _apply_monthly(state: GameState, city) -> None:  # type: ignore[no-untyped-d
                 f"{city.name}: grain dole could not be paid in full "
                 f"({drained:.0f} of {needed:.0f}).",
             )
-
-    # Garrison upkeep — denarii from the treasury. Soldier rations are now
-    # event-based (see grain.py): they eat from granaries on the legionary
-    # meal schedule, twice a day. Charging monthly grain here would
-    # double-debit the city.
-    upkeep_d = city.garrison.legionaries * DENARII_PER_LEGIONARY_MONTH
-    if city.treasury.denarii >= upkeep_d:
-        city.treasury.denarii -= upkeep_d
-    else:
-        city.treasury.denarii = 0.0
-        push_log(
-            state.log,
-            state.tick,
-            LogSeverity.BAD,
-            f"{city.name}: treasury empty, soldiers go unpaid this month.",
-        )

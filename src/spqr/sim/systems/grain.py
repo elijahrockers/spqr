@@ -26,7 +26,6 @@ from spqr.sim.models import (
     FARM_GRAIN_CAPACITY,
     FARM_TRANSPORT_REACH_COST,
     FARM_WORKER_HOURS_PER_HARVEST,
-    GRAIN_PER_LEGIONARY_MEAL,
     GRAIN_PER_MEAL,
     GRAIN_TRANSPORT_RATE,
     GRAIN_YIELD_PER_HARVEST,
@@ -35,8 +34,6 @@ from spqr.sim.models import (
     GRANARY_REACH_COST,
     GROWING_SEASON_MONTHS,
     HOUSING_CAPACITY,
-    LEGIONARY_MEAL_INTERVAL_HOURS,
-    LEGIONARY_MEAL_OFFSET_HOURS,
     MEAL_INTERVAL_HOURS,
     MEAL_OFFSET_HOURS,
     BuildingKind,
@@ -52,19 +49,9 @@ def _is_meal_tick(tick: int, cls: int) -> bool:
     return (tick - MEAL_OFFSET_HOURS[cls]) % MEAL_INTERVAL_HOURS[cls] == 0
 
 
-def _is_legionary_meal_tick(tick: int) -> bool:
-    return (
-        tick - LEGIONARY_MEAL_OFFSET_HOURS
-    ) % LEGIONARY_MEAL_INTERVAL_HOURS == 0
-
-
 def _pop_count(d, cls: PopClass) -> float:  # type: ignore[no-untyped-def]
-    if cls == PopClass.SLAVE:
-        return d.pops.slaves
     if cls == PopClass.PLEB:
         return d.pops.plebs
-    if cls == PopClass.EQUES:
-        return d.pops.equites
     return d.pops.patricians
 
 
@@ -183,12 +170,11 @@ def _consume(
     granary_cov: dict[int, dict[tuple[int, int], float]],
 ) -> None:
     """Discrete meal events. Each civilian class fires only on its scheduled
-    tick (see MEAL_INTERVAL_HOURS / MEAL_OFFSET_HOURS). Legionaries eat
-    twice daily from granaries serving the barracks. Outside of meal ticks
-    this is a no-op — granary inventories should look like a staircase
-    descending across the day, not a smooth slope."""
+    tick (see MEAL_INTERVAL_HOURS / MEAL_OFFSET_HOURS). Outside of meal
+    ticks this is a no-op — granary inventories should look like a
+    staircase descending across the day, not a smooth slope."""
     for d in city.districts:
-        for cls in (PopClass.SLAVE, PopClass.PLEB, PopClass.EQUES, PopClass.PATRICIAN):
+        for cls in (PopClass.PLEB, PopClass.PATRICIAN):
             cls_id = int(cls)
             if not _is_meal_tick(state.tick, cls_id):
                 continue
@@ -205,16 +191,6 @@ def _consume(
             ]
             unmet = _serve_meal(city, houses, granary_cov, demand)
             _apply_meal_satisfaction(d, demand, unmet)
-
-    # Soldiers — per-city not per-district. Eat from granaries serving any
-    # completed barracks tile.
-    if _is_legionary_meal_tick(state.tick) and city.garrison.legionaries > 0:
-        demand = city.garrison.legionaries * GRAIN_PER_LEGIONARY_MEAL
-        barracks = [
-            b for b in city.buildings
-            if b.kind == BuildingKind.BARRACKS and b.completion >= 1.0
-        ]
-        _serve_meal(city, barracks, granary_cov, demand)
 
 
 def _serve_meal(
@@ -310,7 +286,7 @@ def _sync_treasury_grain(city: City) -> None:
 def drain_treasury_grain(city: City, amount: float) -> float:
     """Drain `amount` from the city's grain stockpile (across granaries
     largest-first). Returns the amount actually drained. Used by the
-    economy system for monthly garrison upkeep + dole."""
+    economy system for the monthly grain dole."""
     drained = 0.0
     granaries = [
         b for b in city.buildings
