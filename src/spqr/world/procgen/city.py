@@ -5,6 +5,8 @@ import random
 import numpy as np
 
 from spqr.sim.models import (
+    Building,
+    BuildingKind,
     City,
     CityTerrain,
     CityTile,
@@ -18,6 +20,36 @@ from .names import city_name
 
 CITY_W = 60
 CITY_H = 30
+
+
+# Compact 6×3 starter block:
+#   row 0:  F F F G W L     (3 farms, granary, warehouse, lumber mill)
+#   row 1:  = = = = = =     (paved road across the middle)
+#   row 2:  R R R F F F     (3 residences, 3 more farms)
+# Total: 6 farms, 3 residences, 1 granary, 1 warehouse, 1 lumber mill,
+# 6 road tiles.
+_STARTER_LAYOUT: list[tuple[BuildingKind, int, int]] = [
+    (BuildingKind.FARM,        0, 0),
+    (BuildingKind.FARM,        1, 0),
+    (BuildingKind.FARM,        2, 0),
+    (BuildingKind.GRANARY,     3, 0),
+    (BuildingKind.WAREHOUSE,   4, 0),
+    (BuildingKind.LUMBER_MILL, 5, 0),
+    (BuildingKind.ROAD,        0, 1),
+    (BuildingKind.ROAD,        1, 1),
+    (BuildingKind.ROAD,        2, 1),
+    (BuildingKind.ROAD,        3, 1),
+    (BuildingKind.ROAD,        4, 1),
+    (BuildingKind.ROAD,        5, 1),
+    (BuildingKind.RESIDENCE,   0, 2),
+    (BuildingKind.RESIDENCE,   1, 2),
+    (BuildingKind.RESIDENCE,   2, 2),
+    (BuildingKind.FARM,        3, 2),
+    (BuildingKind.FARM,        4, 2),
+    (BuildingKind.FARM,        5, 2),
+]
+_STARTER_BLOCK_W = 6
+_STARTER_BLOCK_H = 3
 
 
 def _terrain_field(rng: random.Random) -> np.ndarray:
@@ -54,9 +86,48 @@ def _terrain_field(rng: random.Random) -> np.ndarray:
     return terrain
 
 
+def _find_buildable_block(
+    terrain: np.ndarray, w: int, h: int
+) -> tuple[int, int] | None:
+    """Find the top-left (x, y) of an unoccupied w×h rectangle of
+    grass/dirt tiles whose center is closest to the map center. Returns
+    None if no such block exists (rare on default terrain)."""
+    cy_target, cx_target = CITY_H // 2, CITY_W // 2
+    best: tuple[int, int] | None = None
+    best_dist = float("inf")
+    buildable_ids = (int(CityTerrain.GRASS), int(CityTerrain.DIRT))
+    for y0 in range(CITY_H - h + 1):
+        for x0 in range(CITY_W - w + 1):
+            block = terrain[y0:y0 + h, x0:x0 + w]
+            ok = True
+            for cell in block.flat:
+                if cell not in buildable_ids:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            cy_block = y0 + h // 2
+            cx_block = x0 + w // 2
+            dist = (cy_block - cy_target) ** 2 + (cx_block - cx_target) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best = (x0, y0)
+    return best
+
+
 def generate_city(
-    rng: random.Random, region_x: int, region_y: int, city_id: int
+    rng: random.Random,
+    region_x: int,
+    region_y: int,
+    city_id: int,
+    *,
+    seed_starter: bool = True,
 ) -> City:
+    """Build a city with random terrain. With `seed_starter=True`
+    (the production default), drop a compact starter block of farms +
+    residences + granary + warehouse + lumber mill + road into the most
+    central buildable area. Tests that need a clean slate pass
+    `seed_starter=False`."""
     terrain = _terrain_field(rng)
     tiles = [
         CityTile(terrain=CityTerrain(int(terrain[y, x])), building_id=-1)
@@ -72,15 +143,47 @@ def generate_city(
         width=CITY_W,
         height=CITY_H,
         tiles=tiles,
-        # SimCity-style fresh start: no buildings, no grain. The player
-        # designates the first residence plot; population migrates in.
+        # Starting reserves cover initial designations beyond the seeded
+        # block. Mills + quarries are required to refill these.
         treasury=Resources(grain=0.0, denarii=500.0, timber=80.0, stone=40.0),
     )
 
-    # One starting district owns whatever the player builds. Pops start
-    # at zero — plebs migrate in once a residence plot exists.
+    # One starting district owns the seeded block (and anything the
+    # player builds later). Pops start at zero — plebs migrate in once
+    # the residences are reachable.
     pops = PopPool(plebs=0.0, patricians=0.0)
     district = District(id=0, name="Centrum", pops=pops, satisfaction=0.6)
     city.districts.append(district)
 
+    if seed_starter:
+        _place_starter_block(city, terrain, district)
+
     return city
+
+
+def _place_starter_block(
+    city: City, terrain: np.ndarray, district: District
+) -> None:
+    """Find the most central 6×3 buildable rectangle and stamp the
+    starter block into it. Buildings are placed at completion=1.0 so
+    the player can use them immediately."""
+    spot = _find_buildable_block(terrain, _STARTER_BLOCK_W, _STARTER_BLOCK_H)
+    if spot is None:
+        # No flat 6×3 block on this map; leave empty. The player can
+        # still build manually.
+        return
+    x0, y0 = spot
+    for kind, dx, dy in _STARTER_LAYOUT:
+        x = x0 + dx
+        y = y0 + dy
+        building = Building(
+            id=city.next_building_id,
+            kind=kind,
+            x=x,
+            y=y,
+            completion=1.0,
+        )
+        city.next_building_id += 1
+        city.buildings.append(building)
+        city.tiles[y * CITY_W + x].building_id = building.id
+        district.building_ids.append(building.id)

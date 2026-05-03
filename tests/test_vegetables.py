@@ -34,7 +34,7 @@ def _advance_to_month(eng, target_month):
 
 
 def test_vegetables_farm_harvests_into_farm_vegetables_stored():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=0.0, grain_stocked=0.0)
@@ -52,7 +52,7 @@ def test_vegetables_farm_harvests_into_farm_vegetables_stored():
 
 
 def test_vegetables_transport_to_warehouse():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=0.0, grain_stocked=0.0)
@@ -95,7 +95,7 @@ def test_vegetables_transport_to_warehouse():
 def test_pleb_meal_drains_warehouse_when_only_veg_in_reach():
     """If the only food source in reach has vegetables (granary empty
     or absent), plebs draw from the warehouse and don't starve."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=0.0)
@@ -131,7 +131,7 @@ def test_pleb_meal_drains_warehouse_when_only_veg_in_reach():
 def test_pleb_meal_splits_when_both_food_types_in_reach():
     """When both grain (granary) and veg (warehouse) are in reach with
     stock, a pleb meal tick should drain both sources."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=1000.0)
@@ -167,7 +167,7 @@ def test_variety_bonus_outpaces_grain_only():
     same wall-clock window, the variety setup should have higher
     satisfaction."""
     def setup(with_veg: bool):
-        state = new_game(seed=42)
+        state = new_game(seed=42, seed_starter=False)
         eng = Engine(state, default_systems())
         city = state.player_city()
         bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=10_000.0)
@@ -205,7 +205,7 @@ def test_variety_bonus_outpaces_grain_only():
 
 
 def test_treasury_vegetables_aggregates_warehouse_stocks():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Designate two warehouses; hand-finish + seed.

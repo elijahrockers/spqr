@@ -13,7 +13,7 @@ from spqr.sim.systems import default_systems
 
 
 def test_step_advances_tick_count():
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     assert state.tick == 0
     eng.step(10)
@@ -21,7 +21,7 @@ def test_step_advances_tick_count():
 
 
 def test_pause_command_changes_speed():
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     assert state.speed == Speed.NORMAL
     eng.submit(TogglePause())
@@ -33,7 +33,7 @@ def test_pause_command_changes_speed():
 
 
 def test_set_speed_clamps():
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     eng.submit(SetSpeed(99))
     eng.step(1)
@@ -44,7 +44,7 @@ def test_set_speed_clamps():
 
 
 def test_place_zone_rect_only_fills_buildable_empty_tiles():
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Grant unlimited treasury so the test isolates the buildability check.
@@ -83,7 +83,7 @@ def test_place_zone_rect_only_fills_buildable_empty_tiles():
 def test_place_zone_rect_skips_unaffordable_tiles():
     """Treasury-bounded partial placement: only as many tiles as the city
     can afford get designated; the rest are skipped with a warning."""
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Cap timber so only 3 farms (3 * 10 = 30) can be afforded.
@@ -101,7 +101,7 @@ def test_place_zone_rect_skips_unaffordable_tiles():
 
 
 def test_place_zone_debits_treasury():
-    state = new_game(seed=2)
+    state = new_game(seed=2, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     den_before = city.treasury.denarii
@@ -121,14 +121,14 @@ def test_place_zone_debits_treasury():
     assert spot is not None
     eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.WAREHOUSE))
     eng.step(1)
-    # Warehouse cost: 80d / 20t / 20s.
+    # Warehouse cost: 80d / 20t / 0s.
     assert city.treasury.denarii == den_before - 80
     assert city.treasury.timber == timber_before - 20
-    assert city.treasury.stone == stone_before - 20
+    assert city.treasury.stone == stone_before
 
 
 def test_construction_stalls_without_workforce():
-    state = new_game(seed=3)
+    state = new_game(seed=3, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Drain pop so there are no workers left after operational allocation.
@@ -154,7 +154,7 @@ def test_construction_stalls_without_workforce():
 
 
 def test_construction_uses_builder_slots_and_advances():
-    state = new_game(seed=4)
+    state = new_game(seed=4, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Construction needs labor; pop now starts at 0, seed it directly
@@ -180,7 +180,7 @@ def test_construction_uses_builder_slots_and_advances():
 def test_total_storage_capacity_grows_when_warehouse_completes():
     from spqr.engine.tick import total_storage_capacity
 
-    state = new_game(seed=5)
+    state = new_game(seed=5, seed_starter=False)
     city = state.player_city()
     # Fresh start: no seeded buildings, so no storage capacity yet.
     base_cap = total_storage_capacity(city)
@@ -211,7 +211,7 @@ def test_total_storage_capacity_grows_when_warehouse_completes():
 
 
 def test_place_zone_rect_normalizes_corners():
-    state = new_game(seed=2)
+    state = new_game(seed=2, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     n_before = len(city.buildings)
@@ -220,7 +220,7 @@ def test_place_zone_rect_normalizes_corners():
     eng.step(1)
     placed_a = len(city.buildings) - n_before
     # And again with the canonical order.
-    state2 = new_game(seed=2)
+    state2 = new_game(seed=2, seed_starter=False)
     eng2 = Engine(state2, default_systems())
     n_before2 = len(state2.player_city().buildings)
     eng2.submit(PlaceZoneRect(x1=18, y1=13, x2=20, y2=15, kind=ZoneKind.WORKSHOP))
@@ -230,7 +230,7 @@ def test_place_zone_rect_normalizes_corners():
 
 
 def test_is_buildable_rejects_water_and_buildings():
-    state = new_game(seed=3)
+    state = new_game(seed=3, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Find a water tile and confirm it rejects.
@@ -263,7 +263,7 @@ def test_is_buildable_rejects_water_and_buildings():
 
 
 def test_place_zone_creates_building():
-    state = new_game(seed=1)
+    state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     n_before = len(city.buildings)

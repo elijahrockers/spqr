@@ -17,7 +17,7 @@ from ._helpers import bootstrap_starter_city
 
 
 def test_granary_history_records_per_tick():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]
@@ -32,7 +32,7 @@ def test_granary_history_records_per_tick():
 
 
 def test_granary_history_caps_at_max_samples():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]
@@ -41,7 +41,7 @@ def test_granary_history_caps_at_max_samples():
 
 
 def test_render_granary_info_lists_served_buildings():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     handles = bootstrap_starter_city(state, eng)
@@ -53,7 +53,7 @@ def test_render_granary_info_lists_served_buildings():
 
 
 def test_render_graph_hourly_mode():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]
@@ -65,7 +65,7 @@ def test_render_graph_hourly_mode():
 
 
 def test_render_graph_daily_mode_aggregates_24h_chunks():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]
@@ -78,7 +78,7 @@ def test_render_graph_daily_mode_aggregates_24h_chunks():
 
 
 def test_render_graph_handles_empty_history():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]

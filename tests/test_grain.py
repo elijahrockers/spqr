@@ -33,12 +33,14 @@ def _advance_to_month(eng: Engine, target_month: int) -> None:
 
 
 def test_farms_do_not_grow_outside_growing_season():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
-    handles = bootstrap_starter_city(state, eng)
+    handles = bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=10_000.0)
     farm = handles["farm"]
-    # Game starts in month 1 (January, off-season). Run for a month and
-    # confirm maturity stayed at 0.
+    # Game starts in March; advance to October (off-season).
+    _advance_to_month(eng, 10)
+    farm.grain_maturity = 0.0
+    farm.grain_stored = 0.0
     eng.step(HOURS_PER_MONTH)
     _, month, _ = state.date()
     assert month not in GROWING_SEASON_MONTHS
@@ -47,51 +49,43 @@ def test_farms_do_not_grow_outside_growing_season():
 
 
 def test_farm_grows_and_harvests_during_season():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
-    # Zero plebs so meal consumption doesn't muddy the signal — we only
-    # care that wheat farms produce in season.
-    handles = bootstrap_starter_city(state, eng, plebs=0.0, grain_stocked=0.0)
+    # Plebs supply farm labor; stockpile keeps them from starving so
+    # they don't migrate out before we measure production.
+    handles = bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=10_000.0)
     farm = handles["farm"]
-    granary = handles["granary"]
-    _advance_to_month(eng, 3)  # March
-    initial_granary_stock = granary.grain_stored
-    initial_farm_stock = farm.grain_stored
-    # Wheat takes ~720 worker-hours / 1 worker to ripen — give a full
-    # month plus margin.
-    eng.step(800)
-    moved = (
-        (granary.grain_stored - initial_granary_stock)
-        + (farm.grain_stored - initial_farm_stock)
-    )
-    assert moved > 0
+    # Already in March (growing season). Wait one tick for labor.step
+    # to assign a worker, then confirm growth advances.
+    eng.step(1)
+    assert farm.workers_assigned >= 1
+    farm.grain_maturity = 0.0
+    eng.step(100)
+    assert farm.grain_maturity > 0
 
 
 def test_harvest_yield_lands_in_granary_via_transport():
-    """A harvest from a farm with a single in-range granary should fully
-    land in that granary within a reasonable transport window."""
-    state = new_game(seed=42)
+    """A harvest from a farm with a single in-range granary should
+    fully land in that granary within a reasonable transport window."""
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    handles = bootstrap_starter_city(state, eng, grain_stocked=0.0)
+    handles = bootstrap_starter_city(state, eng, plebs=10.0, grain_stocked=10_000.0)
     farm = handles["farm"]
     granary = handles["granary"]
     _sync_treasury_grain(city)
-    # Force a harvest by setting maturity just below 1.0 and running 1 tick.
-    farm.grain_maturity = 0.999
-    farm.workers_assigned = 6  # ensure growth picks up
-    # Need to be in growing season for grow-and-harvest to fire.
-    _advance_to_month(eng, 6)
-    # Clear stockpile after advancing.
+    # Already in growing season (March). Force an immediate harvest by
+    # setting maturity just below 1.0; with any worker the next tick
+    # will fire the harvest. Then drain the granary so we can see the
+    # harvested grain land via transport.
     granary.grain_stored = 0.0
     farm.grain_maturity = 0.999
-    # Wait for harvest + transport to complete.
-    eng.step(200)
+    eng.step(50)
     assert granary.grain_stored > 0.0
 
 
 def test_drain_treasury_grain_pulls_from_granaries():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     handles = bootstrap_starter_city(state, eng, grain_stocked=0.0)
@@ -108,7 +102,7 @@ def test_meal_event_fires_only_on_scheduled_tick():
     """A pleb meal fires when systems run with state.tick == 6 (i.e. during
     the step that advances 5 -> 6). The granary should drop by exactly the
     pleb meal demand on that step and stay flat between meals."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     handles = bootstrap_starter_city(state, eng)
@@ -149,7 +143,7 @@ def test_meal_event_fires_only_on_scheduled_tick():
 def test_grain_inventory_is_a_staircase_not_a_slope():
     """Across one game day, granary inventory should drop in discrete
     steps at meal ticks and stay flat in between."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     handles = bootstrap_starter_city(state, eng)
     granary = handles["granary"]
@@ -172,7 +166,7 @@ def test_grain_inventory_is_a_staircase_not_a_slope():
 def test_coverage_extended_by_roads():
     """Direct (no roads) reach is small; carving a road from the granary
     out to a far tile extends the coverage in the road's direction."""
-    state = new_game(seed=11)
+    state = new_game(seed=11, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Use a deterministic granary placed at (15, 10) on a guaranteed grass

@@ -50,7 +50,7 @@ def test_quarry_costs_timber():
 
 
 def test_lumber_mill_produces_timber_when_workers_assigned():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Build a warehouse so total_storage_capacity > 0 (forum absent on
@@ -74,7 +74,7 @@ def test_lumber_mill_produces_timber_when_workers_assigned():
 
 
 def test_quarry_produces_stone_when_workers_assigned():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
@@ -95,7 +95,7 @@ def test_quarry_produces_stone_when_workers_assigned():
 
 
 def test_industry_halts_when_at_storage_cap():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # No forum / warehouse → cap is 0. Mill should produce nothing
@@ -116,7 +116,7 @@ def test_industry_halts_when_at_storage_cap():
 
 
 def test_industry_resumes_after_warehouse_unblocks_cap():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0

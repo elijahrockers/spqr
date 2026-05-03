@@ -89,7 +89,7 @@ BUILDING_COST: dict[BuildingKind, Resources] = {
     BuildingKind.RESIDENCE:   Resources(denarii=50,  timber=0,  stone=0,  grain=0),
     BuildingKind.WORKSHOP:    Resources(denarii=60,  timber=15, stone=10, grain=0),
     BuildingKind.LUMBER_MILL: Resources(denarii=80,  timber=0,  stone=10, grain=0),
-    BuildingKind.WAREHOUSE:   Resources(denarii=80,  timber=20, stone=20, grain=0),
+    BuildingKind.WAREHOUSE:   Resources(denarii=80,  timber=20, stone=0,  grain=0),
     BuildingKind.DOMUS:       Resources(denarii=100, timber=20, stone=30, grain=0),
     BuildingKind.QUARRY:      Resources(denarii=100, timber=20, stone=0,  grain=0),
     BuildingKind.TEMPLE:      Resources(denarii=150, timber=20, stone=40, grain=0),

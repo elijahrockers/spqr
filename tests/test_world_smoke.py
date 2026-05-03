@@ -10,7 +10,7 @@ from ._helpers import bootstrap_starter_city, find_clear_grass
 
 
 def test_runs_one_full_year_without_crashing():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     # Drop in the minimal starter set so migration has somewhere to land
     # and can be fed; otherwise pop stays at 0 by design. The bootstrap
@@ -31,7 +31,7 @@ def test_runs_one_full_year_without_crashing():
 def test_buildings_under_construction_complete_within_two_weeks():
     from spqr.engine.commands import PlaceZone, ZoneKind
 
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Construction needs labor — seed pleb pop directly so the test

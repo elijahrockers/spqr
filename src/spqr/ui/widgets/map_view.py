@@ -21,6 +21,7 @@ from spqr.sim.models import (
     Province,
     RegionBiome,
     SiteKind,
+    residence_capacity,
 )
 
 
@@ -138,6 +139,8 @@ def _render_city(
     else:
         rx_lo = ry_lo = rx_hi = ry_hi = -1
 
+    full_residence_ids = _full_residence_ids(city)
+
     text = Text(no_wrap=True)
     for y in range(city.height):
         for x in range(city.width):
@@ -155,6 +158,8 @@ def _render_city(
                     # else: keep terrain glyph from above
                 else:
                     glyph, color = BUILDING_GLYPH[b.kind]
+                    if b.id in full_residence_ids:
+                        color = "bright_green"
             style = Style(color=color)
             # Range highlight underlies drag and cursor — drag/cursor wins.
             if range_highlight is not None and (x, y) in range_highlight:
@@ -175,6 +180,34 @@ def _render_city(
             text.append(glyph, style=style)
         text.append("\n")
     return text
+
+
+def _full_residence_ids(city: City) -> frozenset[int]:
+    """IDs of completed RESIDENCE / DOMUS buildings whose district is
+    at or above housing capacity. Pop is tracked per-district, so all
+    residences in a fully-utilized district render as "full"
+    (bright green) — there's no per-residence occupancy to split."""
+    full: set[int] = set()
+    for d in city.districts:
+        pleb_cap = 0
+        domus_cap = 0
+        residence_ids: list[int] = []
+        domus_ids: list[int] = []
+        for b_id in d.building_ids:
+            b = city.buildings[b_id]
+            if b.completion < 1.0:
+                continue
+            if b.kind == BuildingKind.RESIDENCE:
+                pleb_cap += residence_capacity(b)
+                residence_ids.append(b_id)
+            elif b.kind == BuildingKind.DOMUS:
+                domus_cap += residence_capacity(b)
+                domus_ids.append(b_id)
+        if pleb_cap > 0 and d.pops.plebs >= pleb_cap - 0.5:
+            full.update(residence_ids)
+        if domus_cap > 0 and d.pops.patricians >= domus_cap - 0.5:
+            full.update(domus_ids)
+    return frozenset(full)
 
 
 def _render_region(province: Province) -> Text:

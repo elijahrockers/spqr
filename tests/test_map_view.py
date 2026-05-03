@@ -17,7 +17,7 @@ from spqr.ui.widgets.map_view import (
 def test_construction_site_flash_alternates_glyph():
     """An under-construction building should render as the building glyph
     in one phase and as the underlying terrain glyph in the other."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Zone a farm on a known empty grass tile so we can read the tile back.
@@ -62,7 +62,7 @@ def test_construction_site_flash_alternates_glyph():
 def test_completed_building_does_not_flash():
     """A finished building shows its glyph in both flash phases — only
     construction sites alternate."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # HOUSE designations land at completion=1.0 immediately, no labor

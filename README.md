@@ -80,7 +80,7 @@ Press `b` to open. The menu lists the available zones with their hotkeys:
 | `3` | Granary     | 40 / 15 / 10  | grain storage; 2 worker slots      |
 | `4` | Workshop    | 60 / 15 / 10  | 4 workers; future goods            |
 | `5` | Road        | 5 / 0 / 2     | connects tiles                     |
-| `6` | Warehouse   | 80 / 20 / 20  | +250 materials storage; holds vegetables |
+| `6` | Warehouse   | 80 / 20 / 0   | +250 materials storage; holds vegetables |
 | `7` | Lumber mill | 80 / 0 / 10   | 2 workers; produces timber. **No timber to build** — bootstrap-friendly |
 | `8` | Quarry      | 100 / 20 / 0  | 2 workers; produces stone. Needs timber to build |
 | `0` | Clear       | —             | drops the active tool              |

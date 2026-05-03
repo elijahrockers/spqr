@@ -15,10 +15,21 @@ from spqr.world.procgen.region import generate_region
 from spqr.world.procgen.city import generate_city
 
 
-def new_game(seed: int) -> GameState:
+def new_game(seed: int, *, seed_starter: bool = True) -> GameState:
+    """Spin up a fresh game state. `seed_starter=True` (the production
+    default) drops a compact starter block (3 residences, 6 farms, a
+    granary, a warehouse, a lumber mill, and a connecting road) into
+    the most central buildable area. Tests that want a clean map pass
+    `seed_starter=False`."""
     rng = make_rng(seed)
     province, (city_y, city_x) = generate_region(rng)
-    city = generate_city(rng, region_x=city_x, region_y=city_y, city_id=0)
+    city = generate_city(
+        rng,
+        region_x=city_x,
+        region_y=city_y,
+        city_id=0,
+        seed_starter=seed_starter,
+    )
 
     # Register the city as a site on the province for region-view rendering.
     site_id = len(province.sites)

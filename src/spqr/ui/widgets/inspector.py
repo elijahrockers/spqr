@@ -116,16 +116,19 @@ def _render_building(city: City, x: int, y: int, current_month: int, current_tic
             text.append(f"{b.workers_assigned}/{slots}\n", style="cyan")
         cap = residence_capacity(b)
         if cap > 0 or b.kind == BuildingKind.RESIDENCE:
+            occupancy = _residence_occupancy(city, b)
+            full = cap > 0 and occupancy >= cap - 0.5
+            color = "bright_green" if full else "cyan"
             text.append("Housing:    ", style="grey70")
-            text.append(f"{cap}", style="cyan")
             if b.kind == BuildingKind.RESIDENCE:
                 tier_name = RESIDENCE_TIER_NAME.get(b.tier, "?")
+                text.append(f"{occupancy:.0f}/{cap} plebs", style=color)
                 text.append(
                     f"  ({tier_name}, tier {b.tier}/{RESIDENCE_MAX_TIER})\n",
                     style="grey50",
                 )
             else:
-                text.append("\n")
+                text.append(f"{occupancy:.0f}/{cap} patricians\n", style=color)
         storage = STORAGE_CAPACITY.get(b.kind, 0)
         if storage > 0:
             text.append("Storage:    ", style="grey70")
@@ -272,14 +275,8 @@ def _render_residence_meals(text: Text, city: City, b, current_tick: int) -> Non
         text.append("  (residents starve)", style="grey50")
     text.append("\n")
     if b.kind == BuildingKind.RESIDENCE:
-        text.append("Residents:  ", style="grey70")
-        text.append(f"plebs (×{residence_capacity(b)})\n", style="white")
         _render_meal_line(text, "Pleb", 0, current_tick)
     elif b.kind == BuildingKind.DOMUS:
-        text.append("Residents:  ", style="grey70")
-        text.append(
-            f"patricians (×{residence_capacity(b)})\n", style="white"
-        )
         _render_meal_line(text, "Pat", 1, current_tick)
 
 
@@ -302,3 +299,36 @@ def _district_for_building(city: City, b_id: int) -> str | None:
         if b_id in d.building_ids:
             return d.name
     return None
+
+
+def _residence_occupancy(city: City, b) -> float:  # type: ignore[no-untyped-def]
+    """Proportional share of district pops housed in this building.
+    Pop is tracked at the district level, so per-residence occupancy
+    is computed as `district_pops × (this.cap / sum_of_caps)`."""
+    cap = residence_capacity(b)
+    if cap <= 0:
+        return 0.0
+    if b.kind == BuildingKind.RESIDENCE:
+        match_kind = BuildingKind.RESIDENCE
+    elif b.kind == BuildingKind.DOMUS:
+        match_kind = BuildingKind.DOMUS
+    else:
+        return 0.0
+    for d in city.districts:
+        if b.id not in d.building_ids:
+            continue
+        total_cap = sum(
+            residence_capacity(city.buildings[b_id])
+            for b_id in d.building_ids
+            if city.buildings[b_id].kind == match_kind
+            and city.buildings[b_id].completion >= 1.0
+        )
+        if total_cap <= 0:
+            return 0.0
+        pops = (
+            d.pops.plebs if match_kind == BuildingKind.RESIDENCE
+            else d.pops.patricians
+        )
+        share = pops * (cap / total_cap)
+        return min(cap, share)
+    return 0.0

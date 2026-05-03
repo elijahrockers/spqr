@@ -46,6 +46,8 @@ class StatusBar(Widget):
             f"[bold]{city.name}[/]  "
             f"AUC {y} {mo:02d}/{day:02d} {s.hour():02d}:00  "
             f"[yellow]grain {city.treasury.grain:6.0f}[/]  "
+            f"[white]tim {city.treasury.timber:5.0f}[/]  "
+            f"[grey70]sto {city.treasury.stone:5.0f}[/]  "
             f"[bright_yellow]den {city.treasury.denarii:6.0f}[/]  "
             f"[cyan]pop {pops:5.0f}[/]  "
             f"speed [{('red' if s.speed == Speed.PAUSED else 'green')}]{SPEED_LABEL[s.speed]}[/]  "

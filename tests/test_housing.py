@@ -24,19 +24,19 @@ from ._helpers import bootstrap_starter_city, find_clear_grass
 
 
 def test_no_seeded_buildings_at_start():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     city = state.player_city()
     assert len(city.buildings) == 0
 
 
 def test_zero_population_at_start():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     city = state.player_city()
     assert city.districts[0].pops.total() == 0
 
 
 def test_residence_designation_completes_immediately():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     spot = find_clear_grass(city)
@@ -54,7 +54,7 @@ def test_undeveloped_residence_houses_three_plebs():
 
 
 def test_migration_fills_residence_when_food_present():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=0.0, grain_stocked=50_000.0)
@@ -66,7 +66,7 @@ def test_migration_fills_residence_when_food_present():
 
 
 def test_no_migration_when_no_housing():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     d = city.districts[0]
@@ -104,7 +104,7 @@ def _designate_with_adjacent_road(eng, city):
 
 
 def test_residence_upgrades_to_tier1_with_road_and_timber():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
@@ -118,7 +118,7 @@ def test_residence_upgrades_to_tier1_with_road_and_timber():
 
 
 def test_residence_does_not_upgrade_without_road():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     spot = find_clear_grass(city)
@@ -133,7 +133,7 @@ def test_residence_does_not_upgrade_without_road():
 def test_cottages_require_stone():
     """Tier 2 (cottages) needs both timber AND stone — set timber but
     no stone, confirm the tier-1→2 upgrade halts at 1."""
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
@@ -151,7 +151,7 @@ def test_cottages_require_stone():
 
 
 def test_cottages_upgrade_when_stone_available():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
@@ -176,7 +176,7 @@ def test_cottages_upgrade_when_stone_available():
 
 
 def test_new_farm_defaults_to_wheat_with_one_worker_slot():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     spot = find_clear_grass(city)
@@ -188,7 +188,7 @@ def test_new_farm_defaults_to_wheat_with_one_worker_slot():
 
 
 def test_set_farm_crop_switches_and_resets_maturity():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     spot = find_clear_grass(city)
@@ -205,7 +205,7 @@ def test_set_farm_crop_switches_and_resets_maturity():
 
 
 def test_vegetables_farm_does_not_produce_grain():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     bootstrap_starter_city(state, eng, plebs=50.0, grain_stocked=0.0)

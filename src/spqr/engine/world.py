@@ -41,6 +41,10 @@ HOURS_PER_YEAR = HOURS_PER_MONTH * MONTHS_PER_YEAR
 
 # Starting in-game year (AUC = ab urbe condita; 753 BC ~ year 1).
 START_YEAR_AUC = 500
+# Starting month, 1..12. Tick 0 maps to day 1 of this month so the
+# player begins the game at the start of the growing season instead of
+# the middle of winter.
+START_MONTH = 3
 
 
 class GameState(msgspec.Struct, frozen=False):
@@ -64,10 +68,13 @@ class GameState(msgspec.Struct, frozen=False):
         return self.cities[self.player_city_id]
 
     def date(self) -> tuple[int, int, int]:
-        """Return (year_auc, month_1_to_12, day_1_to_30)."""
+        """Return (year_auc, month_1_to_12, day_1_to_30). Tick 0 maps to
+        month=START_MONTH so the player begins in spring rather than
+        winter; the offset wraps around year boundaries naturally."""
         total_days = self.tick // HOURS_PER_DAY
-        year = START_YEAR_AUC + int(total_days // (DAYS_PER_MONTH * MONTHS_PER_YEAR))
-        rem = total_days % (DAYS_PER_MONTH * MONTHS_PER_YEAR)
+        shifted = total_days + (START_MONTH - 1) * DAYS_PER_MONTH
+        year = START_YEAR_AUC + int(shifted // (DAYS_PER_MONTH * MONTHS_PER_YEAR))
+        rem = shifted % (DAYS_PER_MONTH * MONTHS_PER_YEAR)
         month = int(rem // DAYS_PER_MONTH) + 1
         day = int(rem % DAYS_PER_MONTH) + 1
         return year, month, day

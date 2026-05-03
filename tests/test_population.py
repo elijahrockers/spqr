@@ -7,7 +7,7 @@ from ._helpers import bootstrap_starter_city
 
 
 def test_pops_grow_with_high_satisfaction():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Designate the starter set with the granary stockpiled and one HOUSE
@@ -21,7 +21,7 @@ def test_pops_grow_with_high_satisfaction():
 
 
 def test_pops_shrink_on_starvation():
-    state = new_game(seed=42)
+    state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     # Seed a small pleb pool, then strip every grain source so the
