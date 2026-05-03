@@ -225,6 +225,14 @@ class SpqrApp(App):
             self.push_screen(
                 GraphScreen(self.engine.state, result.granary_id)
             )
+        elif result.kind == "cycle_crop" and result.farm_id is not None:
+            from spqr.engine.commands import SetFarmCrop
+            from spqr.sim.models import Crop
+
+            farm = self.engine.state.player_city().buildings[result.farm_id]
+            members = list(Crop)
+            next_crop = members[(members.index(Crop(farm.crop)) + 1) % len(members)]
+            self.engine.submit(SetFarmCrop(result.farm_id, int(next_crop)))
 
     def _set_range_highlight(self, granary_id: int) -> None:
         from spqr.sim.models import GRANARY_REACH_COST

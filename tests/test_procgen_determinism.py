@@ -18,8 +18,10 @@ def test_generated_world_has_player_city():
     state = new_game(seed=42)
     city = state.player_city()
     assert city.name
-    assert len(city.buildings) >= 5
+    # SimCity-style fresh start: terrain only, no seeded buildings.
+    assert len(city.buildings) == 0
     assert len(city.districts) == 1
+    assert city.districts[0].pops.total() == 0
     kinds = {s.kind for s in state.province.sites}
     from spqr.sim.models import SiteKind
     assert SiteKind.PLAYER_CITY in kinds

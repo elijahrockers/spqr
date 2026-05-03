@@ -63,15 +63,27 @@ def test_completed_building_does_not_flash():
     """A finished building shows its glyph in both flash phases — only
     construction sites alternate."""
     state = new_game(seed=42)
+    eng = Engine(state, default_systems())
     city = state.player_city()
-    # Find a completed FORUM placed by procgen.
-    forum = next(
-        b for b in city.buildings
-        if b.kind == BuildingKind.FORUM and b.completion >= 1.0
-    )
+    # HOUSE designations land at completion=1.0 immediately, no labor
+    # required. Use one as the "completed building" probe.
+    spot = None
+    for y in range(city.height):
+        for x in range(city.width):
+            t = city.tile(x, y)
+            if t.building_id == -1 and t.terrain == CityTerrain.GRASS:
+                spot = (x, y)
+                break
+        if spot:
+            break
+    assert spot is not None
+    eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    house = city.buildings[-1]
+    assert house.completion >= 1.0
     s1 = str(_render_city(city, 0, 0, None, flash_show_building=True))
     s2 = str(_render_city(city, 0, 0, None, flash_show_building=False))
-    idx = forum.y * (city.width + 1) + forum.x
-    forum_glyph = BUILDING_GLYPH[BuildingKind.FORUM][0]
-    assert s1[idx] == forum_glyph
-    assert s2[idx] == forum_glyph
+    idx = house.y * (city.width + 1) + house.x
+    house_glyph = BUILDING_GLYPH[BuildingKind.RESIDENCE][0]
+    assert s1[idx] == house_glyph
+    assert s2[idx] == house_glyph

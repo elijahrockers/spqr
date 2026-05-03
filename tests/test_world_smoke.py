@@ -6,12 +6,18 @@ from spqr.engine.tick import Engine
 from spqr.engine.world import HOURS_PER_YEAR
 from spqr.sim.systems import default_systems
 
+from ._helpers import bootstrap_starter_city, find_clear_grass
+
 
 def test_runs_one_full_year_without_crashing():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
+    # Drop in the minimal starter set so migration has somewhere to land
+    # and can be fed; otherwise pop stays at 0 by design. The bootstrap
+    # itself burns one tick to apply its PlaceZone commands.
+    bootstrap_starter_city(state, eng)
     eng.step(HOURS_PER_YEAR)
-    assert state.tick == HOURS_PER_YEAR
+    assert state.tick >= HOURS_PER_YEAR
     city = state.player_city()
     pops = sum(d.pops.total() for d in city.districts)
     assert pops > 0, "city must not be empty after a year"
@@ -28,17 +34,10 @@ def test_buildings_under_construction_complete_within_two_weeks():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    # Find an empty grass tile.
-    target: tuple[int, int] | None = None
-    for y in range(city.height):
-        for x in range(city.width):
-            t = city.tile(x, y)
-            if t.building_id == -1 and t.terrain.name == "GRASS":
-                target = (x, y)
-                break
-        if target:
-            break
-    assert target is not None
+    # Construction needs labor — seed pleb pop directly so the test
+    # isolates construction mechanics from migration timing.
+    city.districts[0].pops.plebs = 50.0
+    target = find_clear_grass(city)
     eng.submit(PlaceZone(x=target[0], y=target[1], kind=ZoneKind.WORKSHOP))
     eng.step(1)
     new_b = city.buildings[-1]

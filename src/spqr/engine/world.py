@@ -32,8 +32,10 @@ SPEED_TICKS_PER_SEC: dict[Speed, int] = {
 # Hours per game day / month / year. We use a simplified Roman calendar:
 # 30-day months, 12 months/year — close enough for sim purposes.
 HOURS_PER_DAY = 24
+DAYS_PER_WEEK = 7
 DAYS_PER_MONTH = 30
 MONTHS_PER_YEAR = 12
+HOURS_PER_WEEK = HOURS_PER_DAY * DAYS_PER_WEEK
 HOURS_PER_MONTH = HOURS_PER_DAY * DAYS_PER_MONTH
 HOURS_PER_YEAR = HOURS_PER_MONTH * MONTHS_PER_YEAR
 

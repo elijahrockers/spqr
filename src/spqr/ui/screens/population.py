@@ -18,7 +18,7 @@ from spqr.engine.world import GameState
 from spqr.sim.models import (
     BuildingKind,
     City,
-    HOUSING_CAPACITY,
+    residence_capacity,
     WORKER_SLOTS,
 )
 
@@ -128,12 +128,12 @@ def _render_report(state: GameState) -> Text:
     for b in city.buildings:
         if b.completion < 1.0:
             continue
-        if b.kind in (BuildingKind.INSULA, BuildingKind.DOMUS):
-            cap += HOUSING_CAPACITY.get(b.kind, 0)
+        if b.kind in (BuildingKind.RESIDENCE, BuildingKind.DOMUS):
+            cap += residence_capacity(b)
     homeless = max(0.0, civilian - cap)
     _row(text, "Civilians",  f"{civilian:6.0f}", "white")
     _row(text, "Capacity",   f"{cap:6d}",        "white",
-         "  (insulae + domus)")
+         "  (houses + domus)")
     _row(text, "Homeless",   f"{homeless:6.0f}",
          "red" if homeless > 0 else "green")
     text.append("\n")

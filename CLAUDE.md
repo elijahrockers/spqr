@@ -32,17 +32,46 @@ substantive change.
 - **One tick = one in-game hour.** Time constants in `engine/world.py`
   (`HOURS_PER_DAY`, `HOURS_PER_MONTH`, `HOURS_PER_YEAR`).
 - **System order matters** (`sim/systems/__init__.py`): labor →
-  construction → grain → economy → population. Labor must run first so
-  `workers_assigned` is set before any consumer reads it; `grain` runs
-  the full food pipeline (farm growth, cart-to-granary, scheduled meals,
-  treasury aggregate sync) and must precede `economy`, which drains
-  granaries for the dole.
-  Adding a new system: think about which side of `economy` it belongs.
+  construction → grain → industry → housing → economy → population.
+  Labor must run first so `workers_assigned` is set before any consumer
+  reads it; `grain` runs the full food pipeline (farm growth,
+  cart-to-granary, scheduled meals, treasury aggregate sync) and must
+  precede `economy`, which drains granaries for the dole. `industry`
+  (lumber mills + quarries pumping timber/stone into the treasury,
+  capped by total storage) sits before `housing` so the month's tier
+  upgrades see the just-produced materials. `housing` (monthly
+  residence tier upgrades) sits before `population` so the same
+  month's migration sees the bumped capacity. Adding a new system:
+  think about which side of `economy` it belongs.
 - **Granary reach is a Dijkstra cost-12 walk** computed in
   `sim/systems/spatial.py::coverage`. The same primitive backs both the
   grain pipeline and the `i` info-screen range highlight — never
   reimplement it in the UI, or the highlight will silently drift from
   what the simulation uses.
+- **Housing capacity is tier-aware** via
+  `sim/models/building.py::residence_capacity`. Every consumer (grain
+  meal demand, migration cap, inspector display) routes through this
+  helper. RESIDENCE is the building kind; tier 0/1/2/3 carry the
+  actual class ("undeveloped"/"huts"/"cottages"/"insula") via
+  `RESIDENCE_TIER_NAME`. Tier 1 needs only timber; tier 2+ needs
+  timber AND stone (`RESIDENCE_TIER_UPGRADE_TIMBER_COST` /
+  `_STONE_COST`). Reading `RESIDENCE_TIER_CAPACITY[…]` directly
+  bypasses the kind check and desyncs systems — same shape of bug as
+  reimplementing `coverage`.
+- **Farm output is crop-driven** via `farm_worker_slots()`,
+  `farm_worker_hours_per_harvest()`, and `farm_yield_per_harvest()` in
+  `sim/models/building.py`. WHEAT (1 worker, monthly cycle, 150 grain)
+  ships to granaries; VEGETABLES (4 workers, ~5-day cycle, 80 yield)
+  ships to warehouses. Labor and grain both route through these helpers
+  so a wheat farm correctly draws 1 worker.
+- **Two food pipelines, mirrored.** Grain: wheat farms →
+  `grain_stored` → granaries → `treasury.grain`. Vegetables: veg farms
+  → `vegetables_stored` → warehouses → `treasury.vegetables`. Both use
+  the same `spatial.coverage` reach. Pleb meals draw from both when
+  both are in reach (50/50 split, with shortfall topping up from the
+  other side). Patrician meals stay grain-only. Each meal that meets
+  demand from N distinct food types adds `0.003 × N` to district
+  satisfaction — the food-variety desirability bonus.
 - **`msgspec.Struct` typed fields**: construct with the declared type.
   An `int` passed to a `float` field will silently round-trip-coerce and
   break encode-byte-stability (see JOURNAL 2026-04-25).

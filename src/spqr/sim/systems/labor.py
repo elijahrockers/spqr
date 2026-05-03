@@ -12,7 +12,7 @@ from __future__ import annotations
 import random
 
 from spqr.engine.world import GameState
-from spqr.sim.models import BUILDER_SLOTS, WORKER_SLOTS
+from spqr.sim.models import BUILDER_SLOTS, operational_worker_slots
 
 
 def step(state: GameState, rng: random.Random) -> None:
@@ -24,7 +24,7 @@ def step(state: GameState, rng: random.Random) -> None:
                 if b.completion < 1.0:
                     slots = BUILDER_SLOTS.get(b.kind, 1)
                 else:
-                    slots = WORKER_SLOTS.get(b.kind, 0)
+                    slots = operational_worker_slots(b)
                 if slots == 0:
                     b.workers_assigned = 0
                     continue

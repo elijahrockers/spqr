@@ -75,13 +75,15 @@ Press `b` to open. The menu lists the available zones with their hotkeys:
 
 | Key | Zone      | Cost (d/t/s) | Notes                              |
 |-----|-----------|--------------|------------------------------------|
-| `1` | Farm      | 20 / 10 / 0  | 6 worker slots; produces grain     |
-| `2` | Insula    | 50 / 20 / 10 | housing for 40 plebs               |
-| `3` | Granary   | 40 / 15 / 10 | grain storage; 2 worker slots      |
-| `4` | Workshop  | 60 / 15 / 10 | 4 workers; future goods            |
-| `5` | Road      | 5 / 0 / 2    | connects tiles                     |
-| `6` | Warehouse | 80 / 20 / 20 | +250 materials storage             |
-| `0` | Clear     | —            | drops the active tool              |
+| `1` | Farm        | 20 / 10 / 0   | wheat by default (1 worker, monthly harvest); switch crop on info screen |
+| `2` | Residence   | 50 / 0 / 0    | tier-0 undeveloped plot (3 plebs); tiers up to huts/cottages/insula with road + materials |
+| `3` | Granary     | 40 / 15 / 10  | grain storage; 2 worker slots      |
+| `4` | Workshop    | 60 / 15 / 10  | 4 workers; future goods            |
+| `5` | Road        | 5 / 0 / 2     | connects tiles                     |
+| `6` | Warehouse   | 80 / 20 / 20  | +250 materials storage; holds vegetables |
+| `7` | Lumber mill | 80 / 0 / 10   | 2 workers; produces timber. **No timber to build** — bootstrap-friendly |
+| `8` | Quarry      | 100 / 20 / 0  | 2 workers; produces stone. Needs timber to build |
+| `0` | Clear       | —             | drops the active tool              |
 
 `d` denarii, `t` timber, `s` stone. Cost is paid at designation. If you
 designate a rectangle larger than your treasury can afford, only as many
@@ -129,9 +131,10 @@ cell) is a single-tile placement.
 ## Reading the screen
 
 - **City map glyphs:** `.` grass · `T` forest · `^` hill · `~` water ·
-  `#` rock · `=` road. Buildings: `F` forum · `h` insula · `H` domus ·
-  `f` farm · `G` granary · `W` workshop · `S` warehouse · `t` temple.
-  Buildings rendered dim are still under construction.
+  `#` rock · `=` road. Buildings: `F` forum · `h` residence · `H` domus
+  · `f` farm · `G` granary · `W` workshop · `S` warehouse · `L` lumber
+  mill · `Q` quarry · `t` temple. Buildings rendered dim are still
+  under construction.
 - **Region map glyphs:** `@` your city · biomes follow the same
   convention as city terrain, plus `M` for mountain.
 - **Status bar (bottom):** city name · in-game date (AUC year/month/day)
@@ -154,19 +157,45 @@ cell) is a single-tile placement.
 
 - One tick = one in-game hour. At `1×`, simulation matches real time;
   jump to `16×` or `64×` to skip across seasons quickly.
-- Founding happens in winter. The starter granary holds ~2500 grain,
-  enough to reach the spring harvest if you don't waste it. Set the
-  grain dole to `0` early if you're tight (this isn't exposed in the
-  menu yet — it defaults to 0.5 grain/pleb/month).
-- Place farms early. Each farm needs 6 worker slots; only built (full
-  brightness) farms produce. Construction also pulls labor — a building
-  site with no spare workforce will sit at 0% until labor frees up.
+- **You start on bare terrain.** No buildings, no population — just
+  500 denarii / 80 timber / 40 stone in the treasury. Population only
+  arrives once you've designated a residence plot.
+- **Residences are tiered, no construction needed.** Designating a
+  RESIDENCE places a tier-0 undeveloped plot instantly — no labor
+  required, cap of 3 plebs. The plot upgrades on its own once a road
+  sits within ~4 tiles and the treasury has the materials:
+  tier 1 huts (cap 6, 5 timber), tier 2 cottages (cap 15, 20 timber +
+  10 stone), tier 3 insula (cap 40, 50 timber + 25 stone), one tier
+  per game month. Stone gates the cottage→insula path, so plan for a
+  quarry early.
+- **Materials come from lumber mills + quarries.** A lumber mill
+  produces timber; a quarry produces stone. Both yields land in the
+  treasury and are capped by total warehouse storage — when stockpile
+  hits cap, production halts. Build more warehouses to keep producing.
+  The lumber mill needs no timber to build (bootstrap loop), but the
+  quarry does, so the natural order is: mill → quarry.
+- Plebs migrate in once a week proportional to satisfaction, so build
+  a house first; then a wheat farm and granary so your new arrivals
+  don't starve.
+- **Farms grow wheat by default.** A wheat farm uses 1 worker and
+  yields one harvest per month during the growing season — calibrated
+  so one wheat farm sustains one tier-1 (huts, 6 plebs) house. Press
+  `i` on a farm and `c` to switch to vegetables (4 workers, faster
+  cycle). Construction also pulls labor — a building site with no
+  spare workforce will sit at 0% until labor frees up.
+- **Vegetables ship to warehouses, plebs eat them too.** Build a
+  warehouse adjacent to a vegetables farm; harvested veg flows in like
+  grain flows to a granary. A house with **both a granary (with grain)
+  and a warehouse (with vegetables) in reach** gets the food-variety
+  bonus: satisfaction grows twice as fast, so migration accelerates.
+  Press `i` on a house to see "Food types: 2" when the bonus is
+  active. Patricians don't eat vegetables — they're grain-only.
 - **Grain is seasonal.** Farms grow crops only during the growing season
-  (March–September). A fully-staffed farm matures and harvests every
-  ~20 game days, yielding 600 grain per harvest. Outside the growing
-  season they sit idle, so the city must stockpile enough to bridge
-  October–February. Harvested grain sits on the farm until carted to
-  the nearest in-range granary.
+  (March–September). A wheat farm matures and harvests once per month
+  during the season, yielding 150 grain per harvest. Outside the
+  growing season farms sit idle, so the city must stockpile enough to
+  bridge October–February. Harvested grain sits on the farm until
+  carted to the nearest in-range granary.
 - **Granaries feed houses by proximity.** Each granary serves the
   surrounding tiles up to a Dijkstra cost of 12 — that's about 5
   Manhattan tiles in open ground. Roads cost 1 per step (vs. 2.5 for
@@ -176,10 +205,10 @@ cell) is a single-tile placement.
 - **Meals are scheduled events**, not a steady drip. Plebs eat once a
   day (6 am), patricians twice a day (9/21). The granary inventory
   drops in distinct steps at those hours and stays flat in between.
-- The starter city has 100 materials storage (forum) and 80 timber +
-  40 stone in stock. Once you've built a few things you'll need a
-  **warehouse** (+250 capacity) to stockpile more — though there's no
-  production of timber/stone yet, so plan early builds carefully.
+- There's no materials storage at game start; build a **warehouse**
+  (+250 capacity) early — without it, lumber mill / quarry production
+  halts at cap. Once you've drained your starter timber + stone below
+  cap, mills and quarries refill the treasury.
 - Save (`s`) before risky decisions; load (`l`) restores the last save.
 
 ## Verifying / hacking on the engine
@@ -203,9 +232,11 @@ For deeper context on architecture, invariants, and gotchas, read
 
 ## Status
 
-MVP. Working: tick loop, procgen, basic economy (taxation + grain dole),
-two-tier demographics (plebs / patricians), seasonal grain pipeline,
-save/load, TUI. Not yet implemented: trade, multiple districts,
-multi-city play. Military, named-citizen agents, and barbarian raids
-were intentionally cut from MVP scope to focus on peaceful builder
+MVP. Working: tick loop, procgen terrain, basic economy (taxation +
+grain dole), two-tier demographics (plebs / patricians) starting from
+zero with migration-driven inflow, seasonal grain pipeline, tiered
+insulae that auto-upgrade with road amenities, save/load, TUI. Not yet
+implemented: water/aqueducts, multiple districts, multi-city play,
+trade. Military, named-citizen agents, and barbarian raids were
+intentionally cut from MVP scope to focus on peaceful builder
 mechanics.

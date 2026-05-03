@@ -8,12 +8,14 @@ class Resources(msgspec.Struct, frozen=False):
     denarii: float = 0.0
     timber: float = 0.0
     stone: float = 0.0
+    vegetables: float = 0.0
 
     def add(self, other: "Resources") -> None:
         self.grain += other.grain
         self.denarii += other.denarii
         self.timber += other.timber
         self.stone += other.stone
+        self.vegetables += other.vegetables
 
     def can_pay(self, cost: "Resources") -> bool:
         return (
@@ -21,6 +23,7 @@ class Resources(msgspec.Struct, frozen=False):
             and self.denarii >= cost.denarii
             and self.timber >= cost.timber
             and self.stone >= cost.stone
+            and self.vegetables >= cost.vegetables
         )
 
     def pay(self, cost: "Resources") -> None:
@@ -28,3 +31,4 @@ class Resources(msgspec.Struct, frozen=False):
         self.denarii -= cost.denarii
         self.timber -= cost.timber
         self.stone -= cost.stone
+        self.vegetables -= cost.vegetables

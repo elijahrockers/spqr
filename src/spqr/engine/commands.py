@@ -8,11 +8,13 @@ class ZoneKind(enum.IntEnum):
     """Player-placeable zones — a subset of BuildingKind that the user can
     designate. Construction systems will fill these out over time."""
     FARM = 0
-    INSULA = 1
+    RESIDENCE = 1
     GRANARY = 2
     WORKSHOP = 3
     ROAD = 4
     WAREHOUSE = 5
+    LUMBER_MILL = 6
+    QUARRY = 7
 
 
 @dataclass(slots=True)
@@ -53,6 +55,14 @@ class SetGrainDole:
     per_pleb: float
 
 
+@dataclass(slots=True)
+class SetFarmCrop:
+    """Change a farm's crop. crop is a Crop IntEnum value (0=WHEAT,
+    1=VEGETABLES). No-op if the building isn't a FARM."""
+    building_id: int
+    crop: int
+
+
 Command = (
     TogglePause
     | SetSpeed
@@ -60,4 +70,5 @@ Command = (
     | PlaceZoneRect
     | SetTaxRate
     | SetGrainDole
+    | SetFarmCrop
 )

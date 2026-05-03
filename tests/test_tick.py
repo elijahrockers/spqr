@@ -157,6 +157,9 @@ def test_construction_uses_builder_slots_and_advances():
     state = new_game(seed=4)
     eng = Engine(state, default_systems())
     city = state.player_city()
+    # Construction needs labor; pop now starts at 0, seed it directly
+    # to isolate construction mechanics from migration timing.
+    city.districts[0].pops.plebs = 50.0
     # FARM has 1 builder slot, 168 build-hours; with 1 builder, completes at 168.
     spot = None
     for y in range(city.height):
@@ -179,10 +182,12 @@ def test_total_storage_capacity_grows_when_warehouse_completes():
 
     state = new_game(seed=5)
     city = state.player_city()
-    # Starter buildings: forum (100) is the only storage-bearing.
+    # Fresh start: no seeded buildings, so no storage capacity yet.
     base_cap = total_storage_capacity(city)
-    assert base_cap == 100
+    assert base_cap == 0
     eng = Engine(state, default_systems())
+    # Construction needs labor; seed pleb pop directly.
+    city.districts[0].pops.plebs = 50.0
     # Find empty spot and grant materials.
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 10_000.0
@@ -226,8 +231,9 @@ def test_place_zone_rect_normalizes_corners():
 
 def test_is_buildable_rejects_water_and_buildings():
     state = new_game(seed=3)
+    eng = Engine(state, default_systems())
     city = state.player_city()
-    # Find a water tile and a building-occupied tile and confirm both reject.
+    # Find a water tile and confirm it rejects.
     water = next(
         (
             (x, y)
@@ -239,14 +245,20 @@ def test_is_buildable_rejects_water_and_buildings():
     )
     if water is not None:
         assert not is_buildable(city, water[0], water[1])
-    occupied = next(
-        (
-            (b.x, b.y)
-            for b in city.buildings
-        ),
-        None,
-    )
-    assert occupied is not None
+    # Procgen no longer seeds buildings — designate one to occupy a tile.
+    spot = None
+    for y in range(city.height):
+        for x in range(city.width):
+            t = city.tile(x, y)
+            if t.building_id == -1 and t.terrain == CityTerrain.GRASS:
+                spot = (x, y)
+                break
+        if spot:
+            break
+    assert spot is not None
+    eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    occupied = (city.buildings[0].x, city.buildings[0].y)
     assert not is_buildable(city, occupied[0], occupied[1])
 
 

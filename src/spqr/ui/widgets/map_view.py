@@ -38,7 +38,7 @@ CITY_TERRAIN_GLYPH: dict[CityTerrain, tuple[str, str]] = {
 # Glyph + color per building kind. Construction-in-progress is rendered dim.
 BUILDING_GLYPH: dict[BuildingKind, tuple[str, str]] = {
     BuildingKind.FORUM: ("F", "bright_magenta"),
-    BuildingKind.INSULA: ("h", "bright_white"),
+    BuildingKind.RESIDENCE: ("h", "bright_white"),
     BuildingKind.DOMUS: ("H", "bright_white"),
     BuildingKind.FARM: ("f", "yellow"),
     BuildingKind.GRANARY: ("G", "yellow"),
@@ -46,6 +46,8 @@ BUILDING_GLYPH: dict[BuildingKind, tuple[str, str]] = {
     BuildingKind.TEMPLE: ("t", "bright_yellow"),
     BuildingKind.ROAD: ("=", "grey70"),
     BuildingKind.WAREHOUSE: ("S", "bright_cyan"),
+    BuildingKind.LUMBER_MILL: ("L", "yellow"),
+    BuildingKind.QUARRY: ("Q", "grey70"),
 }
 
 REGION_BIOME_GLYPH: dict[RegionBiome, tuple[str, str]] = {

@@ -1,19 +1,23 @@
-"""Grain system — seasonal growth, harvest, transport, consumption.
+"""Grain + vegetables system — seasonal growth, harvest, transport, consumption.
 
 Pipeline per tick:
   1. growth   — operational farms in growing months advance grain_maturity
-                proportional to assigned workers; on hitting 1.0 a yield
-                drops into farm.grain_stored and maturity resets.
-  2. transport— each farm with stored grain ships GRAIN_TRANSPORT_RATE per
-                tick to the nearest in-range granary that has capacity.
-  3. consume  — civilian housing pulls its share of district hourly demand
-                from in-range granaries. Unmet demand is starvation.
-  4. sync     — recompute treasury.grain as the sum of granary inventories
-                so status bar / population screen / save files stay
-                meaningful with the simpler aggregate.
+                proportional to assigned workers; on hitting 1.0 the yield
+                drops into farm.grain_stored (wheat) or farm.vegetables_stored
+                (vegetables) and maturity resets.
+  2. transport— wheat farms ship grain to the nearest in-range granary;
+                vegetables farms ship vegetables to the nearest in-range
+                warehouse. GRAIN_TRANSPORT_RATE per tick per farm.
+  3. consume  — pleb meals draw from both granaries (grain) and warehouses
+                (vegetables) when both are in reach; meals met from
+                multiple food types apply a variety bonus to the
+                district's satisfaction. Patrician meals stay grain-only.
+  4. sync     — recompute treasury.grain and treasury.vegetables as the
+                sum of granary / warehouse inventories.
 
 Spatial reach uses sim.systems.spatial.coverage (Dijkstra with road cost
-discount). Coverages are computed once per granary per tick and reused."""
+discount). Coverages are computed once per granary / warehouse per tick
+and reused."""
 
 from __future__ import annotations
 
@@ -25,20 +29,22 @@ from spqr.sim.models import (
     CLASS_HOUSING,
     FARM_GRAIN_CAPACITY,
     FARM_TRANSPORT_REACH_COST,
-    FARM_WORKER_HOURS_PER_HARVEST,
     GRAIN_PER_MEAL,
     GRAIN_TRANSPORT_RATE,
-    GRAIN_YIELD_PER_HARVEST,
     GRANARY_CAPACITY,
     GRANARY_HISTORY_MAX_SAMPLES,
     GRANARY_REACH_COST,
     GROWING_SEASON_MONTHS,
-    HOUSING_CAPACITY,
     MEAL_INTERVAL_HOURS,
     MEAL_OFFSET_HOURS,
+    WAREHOUSE_VEGETABLES_CAPACITY,
     BuildingKind,
     City,
+    Crop,
     PopClass,
+    farm_worker_hours_per_harvest,
+    farm_yield_per_harvest,
+    residence_capacity,
 )
 
 from .spatial import coverage
@@ -60,10 +66,12 @@ def step(state: GameState, rng: random.Random) -> None:
     in_season = month in GROWING_SEASON_MONTHS
     for city in state.cities:
         granary_cov = _granary_coverages(city)
+        warehouse_cov = _warehouse_coverages(city)
         _grow_and_harvest(state, city, in_season)
-        _transport(state, city, granary_cov)
-        _consume(state, city, granary_cov)
+        _transport(state, city, granary_cov, warehouse_cov)
+        _consume(state, city, granary_cov, warehouse_cov)
         _sync_treasury_grain(city)
+        _sync_treasury_vegetables(city)
         _record_granary_history(city)
 
 
@@ -93,6 +101,17 @@ def _granary_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
     return out
 
 
+def _warehouse_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
+    """Per-warehouse coverage map for vegetables feeding. Same Dijkstra
+    cost cap as granaries — vegetables travel as far as grain does."""
+    out: dict[int, dict[tuple[int, int], float]] = {}
+    for b in city.buildings:
+        if b.kind != BuildingKind.WAREHOUSE or b.completion < 1.0:
+            continue
+        out[b.id] = coverage(city, b.x, b.y, GRANARY_REACH_COST)
+    return out
+
+
 def _grow_and_harvest(state: GameState, city: City, in_season: bool) -> None:
     if not in_season:
         return
@@ -101,20 +120,34 @@ def _grow_and_harvest(state: GameState, city: City, in_season: bool) -> None:
             continue
         if b.workers_assigned <= 0:
             continue
-        if b.grain_stored >= FARM_GRAIN_CAPACITY:
-            # Storage full; growth pauses until pickup catches up. Keeps a
-            # neglected farm from accumulating infinite grain.
+        # Pick the produce bin based on crop. Both bins share
+        # FARM_GRAIN_CAPACITY for now; future iterations may split.
+        if b.crop == int(Crop.WHEAT):
+            stock = b.grain_stored
+        elif b.crop == int(Crop.VEGETABLES):
+            stock = b.vegetables_stored
+        else:
             continue
-        b.grain_maturity += b.workers_assigned / FARM_WORKER_HOURS_PER_HARVEST
+        if stock >= FARM_GRAIN_CAPACITY:
+            # Storage full; growth pauses until pickup catches up. Keeps a
+            # neglected farm from accumulating infinite produce.
+            continue
+        b.grain_maturity += b.workers_assigned / farm_worker_hours_per_harvest(b)
         if b.grain_maturity >= 1.0:
             b.grain_maturity = 0.0
-            yielded = min(GRAIN_YIELD_PER_HARVEST, FARM_GRAIN_CAPACITY - b.grain_stored)
-            b.grain_stored += yielded
+            yield_amount = farm_yield_per_harvest(b)
+            yielded = min(yield_amount, FARM_GRAIN_CAPACITY - stock)
+            if b.crop == int(Crop.WHEAT):
+                b.grain_stored += yielded
+                produce = "grain"
+            else:
+                b.vegetables_stored += yielded
+                produce = "vegetables"
             push_log(
                 state.log,
                 state.tick,
                 LogSeverity.GOOD,
-                f"Farm at ({b.x},{b.y}) harvested {yielded:.0f} grain.",
+                f"Farm at ({b.x},{b.y}) harvested {yielded:.0f} {produce}.",
             )
 
 
@@ -122,38 +155,60 @@ def _transport(
     state: GameState,
     city: City,
     granary_cov: dict[int, dict[tuple[int, int], float]],
+    warehouse_cov: dict[int, dict[tuple[int, int], float]],
 ) -> None:
     for farm in city.buildings:
         if farm.kind != BuildingKind.FARM or farm.completion < 1.0:
             continue
-        if farm.grain_stored <= 0:
-            continue
-        target = _nearest_granary_for_farm(city, farm, granary_cov)
-        if target is None:
-            continue
-        capacity_left = GRANARY_CAPACITY - target.grain_stored
-        if capacity_left <= 0:
-            continue
-        amount = min(GRAIN_TRANSPORT_RATE, farm.grain_stored, capacity_left)
-        farm.grain_stored -= amount
-        target.grain_stored += amount
+        if farm.crop == int(Crop.WHEAT) and farm.grain_stored > 0:
+            target = _nearest_storage_for_farm(
+                city, farm, granary_cov,
+                kind=BuildingKind.GRANARY,
+                stock_attr="grain_stored",
+                capacity=GRANARY_CAPACITY,
+            )
+            if target is None:
+                continue
+            capacity_left = GRANARY_CAPACITY - target.grain_stored
+            amount = min(GRAIN_TRANSPORT_RATE, farm.grain_stored, capacity_left)
+            farm.grain_stored -= amount
+            target.grain_stored += amount
+        elif farm.crop == int(Crop.VEGETABLES) and farm.vegetables_stored > 0:
+            target = _nearest_storage_for_farm(
+                city, farm, warehouse_cov,
+                kind=BuildingKind.WAREHOUSE,
+                stock_attr="vegetables_stored",
+                capacity=WAREHOUSE_VEGETABLES_CAPACITY,
+            )
+            if target is None:
+                continue
+            capacity_left = WAREHOUSE_VEGETABLES_CAPACITY - target.vegetables_stored
+            amount = min(
+                GRAIN_TRANSPORT_RATE, farm.vegetables_stored, capacity_left
+            )
+            farm.vegetables_stored -= amount
+            target.vegetables_stored += amount
 
 
-def _nearest_granary_for_farm(
+def _nearest_storage_for_farm(
     city: City,
     farm,  # type: ignore[no-untyped-def]
-    granary_cov: dict[int, dict[tuple[int, int], float]],
+    cov_by_id: dict[int, dict[tuple[int, int], float]],
+    *,
+    kind: BuildingKind,
+    stock_attr: str,
+    capacity: float,
 ):  # type: ignore[no-untyped-def]
-    # Use a wider transport reach than feeding reach: farms can ship grain
-    # further than a granary can serve houses. Compute a separate coverage
-    # from the FARM's tile so we use the same Dijkstra metric in reverse.
+    """Find the nearest in-transport-reach storage building of `kind`
+    that still has capacity. Used for both grain (granary) and
+    vegetables (warehouse) transport."""
     farm_reach = coverage(city, farm.x, farm.y, FARM_TRANSPORT_REACH_COST)
     best = None
     best_cost = float("inf")
     for b in city.buildings:
-        if b.kind != BuildingKind.GRANARY or b.completion < 1.0:
+        if b.kind != kind or b.completion < 1.0:
             continue
-        if b.grain_stored >= GRANARY_CAPACITY:
+        if getattr(b, stock_attr) >= capacity:
             continue
         c = farm_reach.get((b.x, b.y))
         if c is None:
@@ -168,11 +223,17 @@ def _consume(
     state: GameState,
     city: City,
     granary_cov: dict[int, dict[tuple[int, int], float]],
+    warehouse_cov: dict[int, dict[tuple[int, int], float]],
 ) -> None:
     """Discrete meal events. Each civilian class fires only on its scheduled
     tick (see MEAL_INTERVAL_HOURS / MEAL_OFFSET_HOURS). Outside of meal
     ticks this is a no-op — granary inventories should look like a
-    staircase descending across the day, not a smooth slope."""
+    staircase descending across the day, not a smooth slope.
+
+    Pleb meals draw from both granaries (grain) and warehouses
+    (vegetables) when both are in reach, splitting demand 50/50. The
+    number of distinct food types actually drained from is fed back as a
+    variety bonus to district satisfaction."""
     for d in city.districts:
         for cls in (PopClass.PLEB, PopClass.PATRICIAN):
             cls_id = int(cls)
@@ -189,65 +250,162 @@ def _consume(
                 if city.buildings[b_id].kind == housing_kind
                 and city.buildings[b_id].completion >= 1.0
             ]
-            unmet = _serve_meal(city, houses, granary_cov, demand)
-            _apply_meal_satisfaction(d, demand, unmet)
+            allow_veg = cls == PopClass.PLEB
+            unmet, food_types = _serve_meal(
+                city, houses, granary_cov, warehouse_cov, demand,
+                allow_veg=allow_veg,
+            )
+            _apply_meal_satisfaction(d, demand, unmet, food_types)
 
 
 def _serve_meal(
     city: City,
     houses: list,  # type: ignore[type-arg]
     granary_cov: dict[int, dict[tuple[int, int], float]],
+    warehouse_cov: dict[int, dict[tuple[int, int], float]],
     demand: float,
-) -> float:
+    *,
+    allow_veg: bool,
+) -> tuple[float, int]:
     """Distribute `demand` across `houses` proportional to their housing
-    capacity, draining each house's in-range granaries. If there are no
-    houses of the right kind, fall back to any granary in the city.
-    Returns the unmet portion of the demand."""
+    capacity, draining each house's in-range food sources. Returns
+    `(unmet, food_types_drawn)` where food_types_drawn is the count of
+    distinct food types (1 or 2) that were drained from across the
+    district this meal."""
     if not houses:
-        return _drain_any_granary(city, demand)
-    total_cap = sum(HOUSING_CAPACITY.get(h.kind, 0) for h in houses)
+        unmet = _drain_any_granary(city, demand)
+        return unmet, (1 if unmet < demand else 0)
+    total_cap = sum(residence_capacity(h) for h in houses)
     if total_cap == 0:
-        # Buildings exist but have no housing capacity (e.g. no barracks
-        # yet on a class that doesn't normally need housing). Fall back.
-        return _drain_any_granary(city, demand)
+        unmet = _drain_any_granary(city, demand)
+        return unmet, (1 if unmet < demand else 0)
     unmet = 0.0
+    grain_drawn = False
+    veg_drawn = False
     for h in houses:
-        share = HOUSING_CAPACITY.get(h.kind, 0) / total_cap
+        share = residence_capacity(h) / total_cap
         house_demand = demand * share
-        drained = _drain_for_house(city, h, granary_cov, house_demand)
+        drained, g_used, v_used = _drain_for_house(
+            city, h, granary_cov, warehouse_cov, house_demand,
+            allow_veg=allow_veg,
+        )
         unmet += house_demand - drained
-    return unmet
+        grain_drawn = grain_drawn or g_used
+        veg_drawn = veg_drawn or v_used
+    food_types = int(grain_drawn) + int(veg_drawn)
+    return unmet, food_types
 
 
-def _apply_meal_satisfaction(d, demand: float, unmet: float) -> None:  # type: ignore[no-untyped-def]
+def _apply_meal_satisfaction(
+    d, demand: float, unmet: float, food_types: int,  # type: ignore[no-untyped-def]
+) -> None:
     if unmet > 0:
         ratio = min(1.0, unmet / demand) if demand > 0 else 1.0
         d.satisfaction = max(0.0, d.satisfaction - 0.04 * ratio)
         d.pops.unrest = min(1.0, d.pops.unrest + 0.02 * ratio)
     else:
-        d.satisfaction = min(1.0, d.satisfaction + 0.003)
+        # Variety bonus: +0.003 per distinct food type drained on this
+        # meal. One source = original behavior; two = double growth.
+        bonus = 0.003 * max(1, food_types)
+        d.satisfaction = min(1.0, d.satisfaction + bonus)
 
 
 def _drain_for_house(
     city: City,
     house,  # type: ignore[no-untyped-def]
     granary_cov: dict[int, dict[tuple[int, int], float]],
+    warehouse_cov: dict[int, dict[tuple[int, int], float]],
+    demand: float,
+    *,
+    allow_veg: bool,
+) -> tuple[float, bool, bool]:
+    """Pull `demand` worth of food from in-reach sources for one house.
+
+    When both grain (granary) and vegetables (warehouse) are accessible
+    and have stock, demand splits 50/50. If only one source has stock,
+    that source carries the full demand. Returns
+    `(amount_drained, grain_used, veg_used)`."""
+    if demand <= 0:
+        return 0.0, False, False
+    grain_available = _has_stock_in_reach(
+        city, house, granary_cov, "grain_stored",
+    )
+    veg_available = (
+        allow_veg
+        and _has_stock_in_reach(
+            city, house, warehouse_cov, "vegetables_stored",
+        )
+    )
+    if grain_available and veg_available:
+        grain_target = demand * 0.5
+        veg_target = demand * 0.5
+    elif grain_available:
+        grain_target, veg_target = demand, 0.0
+    elif veg_available:
+        grain_target, veg_target = 0.0, demand
+    else:
+        return 0.0, False, False
+    grain_drained = _drain_from(
+        city, house, granary_cov, "grain_stored", grain_target,
+    )
+    veg_drained = _drain_from(
+        city, house, warehouse_cov, "vegetables_stored", veg_target,
+    )
+    # If one source under-delivered (ran out mid-meal), top up from
+    # whatever's left in the other.
+    shortfall = (grain_target - grain_drained) + (veg_target - veg_drained)
+    if shortfall > 0:
+        if veg_target == 0 or grain_drained < grain_target:
+            extra_v = _drain_from(
+                city, house, warehouse_cov, "vegetables_stored", shortfall,
+            ) if allow_veg else 0.0
+            veg_drained += extra_v
+            shortfall -= extra_v
+        if shortfall > 0 and (grain_target == 0 or veg_drained < veg_target):
+            extra_g = _drain_from(
+                city, house, granary_cov, "grain_stored", shortfall,
+            )
+            grain_drained += extra_g
+    total = grain_drained + veg_drained
+    return total, grain_drained > 0, veg_drained > 0
+
+
+def _has_stock_in_reach(
+    city: City,
+    house,  # type: ignore[no-untyped-def]
+    cov_by_id: dict[int, dict[tuple[int, int], float]],
+    stock_attr: str,
+) -> bool:
+    for b_id, cov in cov_by_id.items():
+        if (house.x, house.y) not in cov:
+            continue
+        if getattr(city.buildings[b_id], stock_attr) > 0:
+            return True
+    return False
+
+
+def _drain_from(
+    city: City,
+    house,  # type: ignore[no-untyped-def]
+    cov_by_id: dict[int, dict[tuple[int, int], float]],
+    stock_attr: str,
     demand: float,
 ) -> float:
-    """Pull `demand` grain from granaries whose coverage includes the house's
-    tile. Returns the amount actually drained."""
+    """Pull `demand` from the in-reach storage buildings of one type
+    (granaries→grain, warehouses→vegetables). Returns amount actually
+    drained."""
     if demand <= 0:
         return 0.0
     drained = 0.0
-    # Stable iteration: by granary id ascending.
-    for g_id in sorted(granary_cov.keys()):
-        if (house.x, house.y) not in granary_cov[g_id]:
+    for b_id in sorted(cov_by_id.keys()):
+        if (house.x, house.y) not in cov_by_id[b_id]:
             continue
-        granary = city.buildings[g_id]
-        take = min(demand - drained, granary.grain_stored)
+        b = city.buildings[b_id]
+        stock = getattr(b, stock_attr)
+        take = min(demand - drained, stock)
         if take <= 0:
             continue
-        granary.grain_stored -= take
+        setattr(b, stock_attr, stock - take)
         drained += take
         if drained >= demand:
             break
@@ -281,6 +439,16 @@ def _sync_treasury_grain(city: City) -> None:
         if b.kind == BuildingKind.GRANARY and b.completion >= 1.0:
             total += b.grain_stored
     city.treasury.grain = total
+
+
+def _sync_treasury_vegetables(city: City) -> None:
+    """Recompute treasury.vegetables as the sum of warehouse veg
+    inventories. Warehouses are authoritative; treasury is a cache."""
+    total = 0.0
+    for b in city.buildings:
+        if b.kind == BuildingKind.WAREHOUSE and b.completion >= 1.0:
+            total += b.vegetables_stored
+    city.treasury.vegetables = total
 
 
 def drain_treasury_grain(city: City, amount: float) -> float:

@@ -19,9 +19,11 @@ from spqr.engine.world import GameState
 from spqr.sim.models import (
     BuildingKind,
     City,
+    Crop,
     GRANARY_CAPACITY,
-    GRANARY_HISTORY_MAX_SAMPLES,
     GRANARY_REACH_COST,
+    farm_worker_slots,
+    farm_yield_per_harvest,
 )
 
 
@@ -33,9 +35,11 @@ class InfoResult:
       "close"     — modal dismissed; no further action
       "highlight" — App should show this granary's coverage on the city map
       "graph"     — App should open the inventory-history graph screen
+      "cycle_crop"— App should cycle the focused farm's crop
     """
     kind: str
     granary_id: int | None = None
+    farm_id: int | None = None
 
 
 # --- Info screen ------------------------------------------------------------
@@ -56,6 +60,8 @@ class _InfoBody(Widget):
         b = city.buildings[self.building_id]
         if b.kind == BuildingKind.GRANARY:
             return _render_granary_info(self.state, city, b)
+        if b.kind == BuildingKind.FARM:
+            return _render_farm_info(b)
         return _render_generic_info(b)
 
 
@@ -79,6 +85,7 @@ class InfoScreen(ModalScreen[InfoResult]):
         Binding("q", "close", "Close"),
         Binding("r", "highlight", "Highlight range", show=False),
         Binding("g", "graph", "Graph", show=False),
+        Binding("c", "cycle_crop", "Cycle crop", show=False),
     ]
 
     def __init__(self, state: GameState, building_id: int) -> None:
@@ -98,6 +105,10 @@ class InfoScreen(ModalScreen[InfoResult]):
         b = self.state.player_city().buildings[self.building_id]
         return b.kind == BuildingKind.GRANARY
 
+    def _is_farm(self) -> bool:
+        b = self.state.player_city().buildings[self.building_id]
+        return b.kind == BuildingKind.FARM
+
     def action_close(self) -> None:
         self.dismiss(InfoResult(kind="close"))
 
@@ -110,6 +121,11 @@ class InfoScreen(ModalScreen[InfoResult]):
         if not self._is_granary():
             return
         self.dismiss(InfoResult(kind="graph", granary_id=self.building_id))
+
+    def action_cycle_crop(self) -> None:
+        if not self._is_farm():
+            return
+        self.dismiss(InfoResult(kind="cycle_crop", farm_id=self.building_id))
 
 
 def _render_generic_info(b) -> Text:  # type: ignore[no-untyped-def]
@@ -147,13 +163,13 @@ def _render_granary_info(state: GameState, city: City, b) -> Text:  # type: igno
         and (ob.x, ob.y) in cov
         and ob.id != b.id
     ]
-    insulae = sum(1 for ob in served if ob.kind == BuildingKind.INSULA)
+    houses = sum(1 for ob in served if ob.kind == BuildingKind.RESIDENCE)
     domus = sum(1 for ob in served if ob.kind == BuildingKind.DOMUS)
     farms = sum(1 for ob in served if ob.kind == BuildingKind.FARM)
     text.append(f"  Reach:       {len(cov)} tiles\n", style="grey70")
     text.append(f"  Serves:      ", style="grey70")
     text.append(
-        f"{insulae} insulae · {domus} domus · {farms} farms\n",
+        f"{houses} residences · {domus} domus · {farms} farms\n",
         style="white",
     )
 
@@ -167,6 +183,27 @@ def _render_granary_info(state: GameState, city: City, b) -> Text:  # type: igno
 
     text.append("  [bright_yellow]R[/]  Highlight range on city map\n")
     text.append("  [bright_yellow]G[/]  Inventory graph\n\n")
+    text.append("[dim]escape / i to close[/]\n")
+    return text
+
+
+def _render_farm_info(b) -> Text:  # type: ignore[no-untyped-def]
+    text = Text()
+    text.append("FARM INFO\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:    ({b.x}, {b.y})\n", style="grey70")
+    text.append(f"  Completion:  {int(b.completion * 100)}%\n", style="grey70")
+    crop_name = Crop(b.crop).name.lower()
+    text.append("  Crop:        ", style="grey70")
+    text.append(f"{crop_name}\n", style="bright_yellow")
+    text.append(f"  Workers:     {b.workers_assigned}/{farm_worker_slots(b)}\n", style="grey70")
+    text.append("  Yield:       ", style="grey70")
+    text.append(
+        f"{int(farm_yield_per_harvest(b))} per harvest\n", style="white"
+    )
+    text.append(f"  In transit:  {b.grain_stored:.0f}\n", style="grey70")
+    text.append("\n")
+    text.append("  [bright_yellow]C[/]  Cycle crop (wheat ↔ vegetables)\n\n")
     text.append("[dim]escape / i to close[/]\n")
     return text
 

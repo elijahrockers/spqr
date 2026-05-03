@@ -7,17 +7,17 @@ from __future__ import annotations
 from spqr.bootstrap import new_game
 from spqr.engine.commands import PlaceZone, ZoneKind
 from spqr.engine.tick import Engine
-from spqr.engine.world import HOURS_PER_MONTH, GameState
+from spqr.engine.world import HOURS_PER_MONTH
 from spqr.sim.models import (
     BuildingKind,
     CityTerrain,
-    FARM_WORKER_HOURS_PER_HARVEST,
-    GRAIN_YIELD_PER_HARVEST,
     GROWING_SEASON_MONTHS,
 )
 from spqr.sim.systems import default_systems
 from spqr.sim.systems.grain import drain_treasury_grain, _sync_treasury_grain
 from spqr.sim.systems.spatial import coverage
+
+from ._helpers import bootstrap_starter_city
 
 
 def _advance_to_month(eng: Engine, target_month: int) -> None:
@@ -35,9 +35,8 @@ def _advance_to_month(eng: Engine, target_month: int) -> None:
 def test_farms_do_not_grow_outside_growing_season():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
-    farm = next(
-        b for b in state.player_city().buildings if b.kind == BuildingKind.FARM
-    )
+    handles = bootstrap_starter_city(state, eng)
+    farm = handles["farm"]
     # Game starts in month 1 (January, off-season). Run for a month and
     # confirm maturity stayed at 0.
     eng.step(HOURS_PER_MONTH)
@@ -50,22 +49,21 @@ def test_farms_do_not_grow_outside_growing_season():
 def test_farm_grows_and_harvests_during_season():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
-    city = state.player_city()
-    farm = next(b for b in city.buildings if b.kind == BuildingKind.FARM)
+    # Zero plebs so meal consumption doesn't muddy the signal — we only
+    # care that wheat farms produce in season.
+    handles = bootstrap_starter_city(state, eng, plebs=0.0, grain_stocked=0.0)
+    farm = handles["farm"]
+    granary = handles["granary"]
     _advance_to_month(eng, 3)  # March
-    # Now in growing season. Workers should be assigned (set by labor.step
-    # next time we advance). Step enough hours to ripen with full crew.
-    target_hours = FARM_WORKER_HOURS_PER_HARVEST // 6 + 5  # buffer for rounding
-    initial_granary_stock = next(
-        b.grain_stored
-        for b in city.buildings
-        if b.kind == BuildingKind.GRANARY
+    initial_granary_stock = granary.grain_stored
+    initial_farm_stock = farm.grain_stored
+    # Wheat takes ~720 worker-hours / 1 worker to ripen — give a full
+    # month plus margin.
+    eng.step(800)
+    moved = (
+        (granary.grain_stored - initial_granary_stock)
+        + (farm.grain_stored - initial_farm_stock)
     )
-    eng.step(target_hours)
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
-    # Either grain landed in the granary or sits on the farm awaiting
-    # transport. The check is that yield exists somewhere.
-    moved = (granary.grain_stored - initial_granary_stock) + farm.grain_stored
     assert moved > 0
 
 
@@ -75,9 +73,9 @@ def test_harvest_yield_lands_in_granary_via_transport():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    farm = next(b for b in city.buildings if b.kind == BuildingKind.FARM)
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
-    granary.grain_stored = 0.0  # empty granary
+    handles = bootstrap_starter_city(state, eng, grain_stocked=0.0)
+    farm = handles["farm"]
+    granary = handles["granary"]
     _sync_treasury_grain(city)
     # Force a harvest by setting maturity just below 1.0 and running 1 tick.
     farm.grain_maturity = 0.999
@@ -94,8 +92,10 @@ def test_harvest_yield_lands_in_granary_via_transport():
 
 def test_drain_treasury_grain_pulls_from_granaries():
     state = new_game(seed=42)
+    eng = Engine(state, default_systems())
     city = state.player_city()
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
+    handles = bootstrap_starter_city(state, eng, grain_stocked=0.0)
+    granary = handles["granary"]
     granary.grain_stored = 1000.0
     _sync_treasury_grain(city)
     drained = drain_treasury_grain(city, 250.0)
@@ -111,15 +111,16 @@ def test_meal_event_fires_only_on_scheduled_tick():
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    # Strip insulae/domus from the district so meal demand uses the
+    handles = bootstrap_starter_city(state, eng)
+    # Strip houses from the district so meal demand uses the
     # `_drain_any_granary` fallback rather than depending on which houses
-    # happen to land in granary range with this seed.
+    # happen to land in granary range.
     d = city.districts[0]
     d.building_ids = [
         b_id for b_id in d.building_ids
-        if city.buildings[b_id].kind not in (BuildingKind.INSULA, BuildingKind.DOMUS)
+        if city.buildings[b_id].kind not in (BuildingKind.RESIDENCE, BuildingKind.DOMUS)
     ]
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
+    granary = handles["granary"]
     # Engine increments tick before running systems. To have systems see
     # tick==6 (the pleb meal), step until tick==5 then step once more.
     while state.tick < 5:
@@ -150,8 +151,8 @@ def test_grain_inventory_is_a_staircase_not_a_slope():
     steps at meal ticks and stay flat in between."""
     state = new_game(seed=42)
     eng = Engine(state, default_systems())
-    city = state.player_city()
-    granary = next(b for b in city.buildings if b.kind == BuildingKind.GRANARY)
+    handles = bootstrap_starter_city(state, eng)
+    granary = handles["granary"]
     samples: list[tuple[int, float]] = []
     for _ in range(24):
         eng.step(1)

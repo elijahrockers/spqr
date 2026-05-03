@@ -8,6 +8,7 @@ from spqr.engine.commands import (
     Command,
     PlaceZone,
     PlaceZoneRect,
+    SetFarmCrop,
     SetGrainDole,
     SetSpeed,
     SetTaxRate,
@@ -38,7 +39,9 @@ class System(Protocol):
 
 _ZONE_TO_BUILDING: dict[ZoneKind, BuildingKind] = {
     ZoneKind.FARM: BuildingKind.FARM,
-    ZoneKind.INSULA: BuildingKind.INSULA,
+    ZoneKind.RESIDENCE: BuildingKind.RESIDENCE,
+    ZoneKind.LUMBER_MILL: BuildingKind.LUMBER_MILL,
+    ZoneKind.QUARRY: BuildingKind.QUARRY,
     ZoneKind.GRANARY: BuildingKind.GRANARY,
     ZoneKind.WORKSHOP: BuildingKind.WORKSHOP,
     ZoneKind.ROAD: BuildingKind.ROAD,
@@ -137,6 +140,30 @@ class Engine:
                 self._place_zone_rect(x, y, x, y, kind)
             case PlaceZoneRect(x1, y1, x2, y2, kind):
                 self._place_zone_rect(x1, y1, x2, y2, kind)
+            case SetFarmCrop(building_id, crop):
+                self._set_farm_crop(building_id, crop)
+
+    def _set_farm_crop(self, building_id: int, crop: int) -> None:
+        city = self.state.player_city()
+        if not (0 <= building_id < len(city.buildings)):
+            return
+        b = city.buildings[building_id]
+        if b.kind != BuildingKind.FARM:
+            return
+        if b.crop == crop:
+            return
+        # Switching crops resets the in-progress harvest — different
+        # plantings, different soil prep.
+        b.crop = crop
+        b.grain_maturity = 0.0
+        from spqr.sim.models import Crop  # local import to avoid cycle
+        crop_name = Crop(crop).name.lower()
+        push_log(
+            self.state.log,
+            self.state.tick,
+            LogSeverity.INFO,
+            f"Farm at ({b.x},{b.y}) replanted with {crop_name}.",
+        )
 
     def _place_zone_rect(
         self, x1: int, y1: int, x2: int, y2: int, kind: ZoneKind
@@ -157,12 +184,17 @@ class Engine:
                     unaffordable += 1
                     continue
                 city.treasury.pay(cost)
+                # RESIDENCE designations skip construction: tier-0 plots
+                # are undeveloped land that admits migrants immediately.
+                # Higher tiers are earned by the housing system as
+                # amenities arrive.
+                completion = 1.0 if b_kind == BuildingKind.RESIDENCE else 0.0
                 building = Building(
                     id=city.next_building_id,
                     kind=b_kind,
                     x=x,
                     y=y,
-                    completion=0.0,
+                    completion=completion,
                 )
                 city.next_building_id += 1
                 city.buildings.append(building)

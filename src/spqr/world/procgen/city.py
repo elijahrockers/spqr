@@ -5,8 +5,6 @@ import random
 import numpy as np
 
 from spqr.sim.models import (
-    Building,
-    BuildingKind,
     City,
     CityTerrain,
     CityTile,
@@ -56,27 +54,6 @@ def _terrain_field(rng: random.Random) -> np.ndarray:
     return terrain
 
 
-def _find_buildable_spot(
-    terrain: np.ndarray, occupied: set[tuple[int, int]], rng: random.Random
-) -> tuple[int, int] | None:
-    """Find a grass/dirt tile not currently occupied. Picks randomly among
-    the closest 50 candidates to map center for compact early layout."""
-    candidates: list[tuple[int, int]] = []
-    cy, cx = CITY_H // 2, CITY_W // 2
-    for y in range(CITY_H):
-        for x in range(CITY_W):
-            if (y, x) in occupied:
-                continue
-            t = terrain[y, x]
-            if t in (int(CityTerrain.GRASS), int(CityTerrain.DIRT)):
-                candidates.append((y, x))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda yx: (yx[0] - cy) ** 2 + (yx[1] - cx) ** 2)
-    pool = candidates[: min(len(candidates), 50)]
-    return rng.choice(pool)
-
-
 def generate_city(
     rng: random.Random, region_x: int, region_y: int, city_id: int
 ) -> City:
@@ -95,52 +72,15 @@ def generate_city(
         width=CITY_W,
         height=CITY_H,
         tiles=tiles,
-        # Grain is the cached aggregate of granary inventories; the actual
-        # starter stockpile is set on the granary below.
+        # SimCity-style fresh start: no buildings, no grain. The player
+        # designates the first residence plot; population migrates in.
         treasury=Resources(grain=0.0, denarii=500.0, timber=80.0, stone=40.0),
     )
 
-    # One starting district that owns the initial pop pool. Later milestones
-    # will subdivide districts as the city grows.
-    pops = PopPool(plebs=50.0, patricians=1.0)
+    # One starting district owns whatever the player builds. Pops start
+    # at zero — plebs migrate in once a residence plot exists.
+    pops = PopPool(plebs=0.0, patricians=0.0)
     district = District(id=0, name="Centrum", pops=pops, satisfaction=0.6)
     city.districts.append(district)
-
-    occupied: set[tuple[int, int]] = set()
-
-    def place(kind: BuildingKind, completion: float = 1.0) -> Building | None:
-        spot = _find_buildable_spot(terrain, occupied, rng)
-        if spot is None:
-            return None
-        y, x = spot
-        building = Building(
-            id=city.next_building_id,
-            kind=kind,
-            x=x,
-            y=y,
-            workers_assigned=0,
-            completion=completion,
-        )
-        city.next_building_id += 1
-        city.buildings.append(building)
-        idx = y * CITY_W + x
-        city.tiles[idx].building_id = building.id
-        district.building_ids.append(building.id)
-        occupied.add((y, x))
-        return building
-
-    place(BuildingKind.FORUM)
-    for _ in range(4):
-        place(BuildingKind.INSULA)
-    for _ in range(3):
-        place(BuildingKind.FARM)
-    starter_granary = place(BuildingKind.GRANARY)
-    if starter_granary is not None:
-        # Granaries are now the canonical grain store; treasury.grain is a
-        # cached aggregate. Stockpile sized to last from the January
-        # founding through the first harvests in March-April with a small
-        # safety margin.
-        starter_granary.grain_stored = 2500.0
-        city.treasury.grain = 2500.0
 
     return city

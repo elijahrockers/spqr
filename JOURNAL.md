@@ -5,6 +5,206 @@ new entries on top.
 
 ---
 
+## 2026-05-03 — Residence rename, material tiers, lumber mill + quarry
+
+Three changes shipped together; schema bumped to v6.
+
+### Renames
+- `BuildingKind.HOUSE` → `BuildingKind.RESIDENCE`. ZoneKind, all
+  HOUSE_* constants, and the `house_capacity` helper renamed in
+  parallel. The substring rename had a sharp edge — `WAREHOUSE`
+  matches `HOUSE`, and a naive replace_all turned it into
+  `WARERESIDENCE`. Caught and reverted; subsequent edits used
+  targeted patterns instead.
+
+### Tier mechanics
+- Tier 0 (undeveloped) capacity: 2 → 3.
+- Tier 2 (cottages) and tier 3 (insula) now require BOTH timber AND
+  stone via the new `RESIDENCE_TIER_UPGRADE_STONE_COST` table:
+  `{1: 0, 2: 10, 3: 25}`. Housing system pays both via
+  `Resources(timber=…, stone=…)` — `treasury.can_pay`/`pay` already
+  handle multi-resource costs uniformly.
+- Tier 1 (huts) still needs timber only, matching the user's
+  "huts requires wood" call.
+
+### Industry
+- New BuildingKinds: `LUMBER_MILL` (10) and `QUARRY` (11).
+  - LUMBER_MILL: 80d / 0t / 10s. **No timber to build** — that's the
+    bootstrap loop the user wanted: you can build the first mill from
+    starter stone alone.
+  - QUARRY: 100d / 20t / 0s. Needs timber, so order is: spend starter
+    timber on a lumber mill → mill produces timber → use that timber
+    to build a quarry → both flow into warehouses.
+- New `sim/systems/industry.py`. Per-tick: each operational mill /
+  quarry adds `rate × workers_assigned` to `treasury.timber` /
+  `treasury.stone`. Production halts when
+  `treasury.timber + treasury.stone >= total_storage_capacity`. This
+  is what "yields are stored in warehouse" means in practice — without
+  warehouse storage, production stops.
+- Rates: `LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK = 0.05`,
+  `QUARRY_STONE_PER_WORKER_PER_TICK = 0.04`. At full staffing
+  (2 workers) that's 2.4 timber/day, 1.92 stone/day. Tunable from
+  `sim/models/building.py`.
+
+### UI
+- Build menu adds hotkeys `7` (lumber mill) and `8` (quarry).
+- Inspector renders the production rate and storage-cap status for
+  mill / quarry. The "production halted" tag appears in red when at
+  cap so the player can see when more warehouses are needed.
+- Map glyphs: `L` (yellow) for lumber mill, `Q` (grey) for quarry.
+
+---
+
+## 2026-05-03 — Vegetables in warehouses + food-variety bonus
+
+Closes the vegetables loop and adds the first real "desirability"
+mechanic: houses with access to both grain *and* vegetables grow
+satisfaction (and therefore migration) twice as fast as grain-only.
+
+### Changes
+- `Resources.vegetables: float = 0.0` and `Building.vegetables_stored:
+  float = 0.0` added. Schema bumped to v5.
+- New `WAREHOUSE_VEGETABLES_CAPACITY = 1000.0` (vs granary's 3000 —
+  vegetables are the supplement, not the staple).
+- `grain.py` extended:
+  - `_grow_and_harvest`: vegetables farms now produce, dropping yield
+    into `farm.vegetables_stored` instead of `farm.grain_stored`.
+  - `_transport`: a generalized `_nearest_storage_for_farm` handles
+    both wheat→granary and veg→warehouse routing.
+  - `_warehouse_coverages` mirrors `_granary_coverages` using the
+    same `GRANARY_REACH_COST = 12.0` Dijkstra cap.
+  - `_consume`/`_serve_meal`/`_drain_for_house`: pleb meals now split
+    50/50 between grain and vegetables when both are in reach with
+    stock; if one source under-delivers, the other tops up the
+    shortfall. Patrician meals stay grain-only (`allow_veg=False`).
+- `_serve_meal` returns `(unmet, food_types_drawn)`, which
+  `_apply_meal_satisfaction` uses to scale the success bonus:
+  `+0.003 × food_types`. So a district drawing from both sources
+  gains satisfaction at 2× the rate of a grain-only district.
+- `_sync_treasury_vegetables` mirrors `_sync_treasury_grain`.
+- Inspector adds: warehouse veg stock, veg-farm "in transit", and a
+  per-house "Food types: N" line so the player can see when the
+  variety bonus kicks in.
+
+### Design choices to revisit
+- Patricians stay grain-only — easy to extend later.
+- 50/50 split when both food types accessible — could weight by
+  proportional stock or always grain-first.
+- Variety bonus is linear in food-type count. Once more food kinds
+  exist (meat? fruit?), might want diminishing returns.
+
+---
+
+## 2026-05-03 — Crops + house-tier rename + weekly migration
+
+Three player-facing changes shipped together; all force a schema bump
+to v4. Old saves fail loudly per the existing invariant.
+
+### Crops
+- New `Crop` IntEnum {WHEAT=0, VEGETABLES=1}. `Building.crop: int = 0`
+  added; meaningful only on FARM.
+- Per-crop tunings live in `CROP_WORKER_SLOTS`,
+  `CROP_WORKER_HOURS_PER_HARVEST`, `CROP_YIELD_PER_HARVEST`. Wheat:
+  1 worker, 720 worker-hours per harvest (= 1 harvest/month at full
+  staffing), 150 grain yield. The yield is calibrated so one wheat
+  farm sustains one tier-1 (huts, 6 plebs) house year-round even
+  accounting for the 7-month growing season: 7 × 150 = 1050 grain/yr
+  vs. 6 × 0.48 × 365 ≈ 1051 demand.
+- Vegetables stub: 4 workers, ~5-day cycle, 80 yield. **Currently
+  produces no consumable** — buildable and switchable but the grain
+  pipeline ignores it. TODO: define a vegetables consumer (likely
+  satisfaction/variety bonus) once the player loop is solid.
+- New `SetFarmCrop(building_id, crop)` command. Wired through
+  `engine/tick.py`; switching crops resets `grain_maturity` (different
+  planting cycles). Exposed in the info screen as `c` hotkey.
+- `labor.py` switched from `WORKER_SLOTS.get(b.kind, 0)` to
+  `operational_worker_slots(b)`, which is FARM-aware (delegates to
+  `farm_worker_slots(b)` based on crop). WORKER_SLOTS no longer has
+  a FARM entry — keeping it in there would have been a footgun.
+
+### House tier rename
+- `BuildingKind.INSULA` → `BuildingKind.HOUSE`. ZoneKind.INSULA →
+  ZoneKind.HOUSE. INSULA_* constants → HOUSE_*. `Insula` was retained
+  as a tier *display name* (HOUSE_TIER_NAME[3] = "insula").
+- New tier table: {0: 2 (undeveloped), 1: 6 (huts), 2: 15 (cottages),
+  3: 40 (insula)}. Tier upgrade timber costs recalibrated to match:
+  {1: 5, 2: 20, 3: 50}.
+- Inspector renders the tier name (e.g. "huts, tier 1/3") and the
+  farm crop (e.g. "Sown with: wheat").
+
+### What was reused
+- `house_capacity()` invariant still holds — every consumer continues
+  to route through it. Just got recalibrated; no consumer-side changes
+  needed beyond the rename.
+- `spatial.coverage` reused unchanged for the road-amenity check.
+
+---
+
+## 2026-05-03 — Weekly immigration waves
+
+Migration was monthly (HOURS_PER_MONTH gate), which made the early
+game feel empty — at default sat=0.6, only 3 plebs/month, taking ~16
+months to fill 6 tier-0 houses (12 capacity).
+
+### Changes
+- New `HOURS_PER_WEEK = 168` constant in `engine/world.py`.
+- `population.py::step` split: weekly migration block, monthly births/
+  deaths/unrest. Both early-return on tick==0.
+- `MIGRATION_BASE_RATE = 5.0` retained but now per-week, so effective
+  inflow at sat=0.6 is ~3 plebs/week (4× the old monthly rate).
+- Out-migration rate rescaled to 0.0125/week (= 5%/month) so a
+  starving district drains at the same long-run pace as before — only
+  the inflow cadence changed in the player-visible direction.
+
+---
+
+## 2026-05-03 — Fresh-terrain start, migration-driven pop, insula tiers
+
+Pivot the early game from "manage an inherited city" to "found one from
+nothing." Schema bumped to v3; old saves fail loudly per the existing
+invariant.
+
+### Changes
+- `world/procgen/city.py` no longer seeds the forum, four insulae, three
+  farms, or the granary. Starter district owns no buildings. Pops start
+  at `PopPool(plebs=0, patricians=0)`. Treasury keeps `500d/80t/40s`,
+  enough for one INSULA + a granary + a couple of farms.
+- `Building` gets a `tier: int = 0` field. `INSULA_TIER_CAPACITY =
+  {0:8, 1:20, 2:40, 3:60}`, `INSULA_TIER_UPGRADE_TIMBER_COST =
+  {1:10, 2:20, 3:30}`, `INSULA_AMENITY_REACH_COST = 4.0`. New helper
+  `house_capacity(b)` is the single tier-aware lookup; CLAUDE.md gets
+  an invariant for it parallel to the `coverage` invariant.
+- INSULA designation cost drops to `50d/0t/0s` (lumber is reserved for
+  upgrades). In `engine/tick.py::_place_zone_rect`, INSULA is
+  special-cased to `completion=1.0` — tier-0 plots are tents, no
+  construction time.
+- New `sim/systems/housing.py`: monthly per-insula tier upgrade if a
+  road is within `INSULA_AMENITY_REACH_COST` of the house tile (via
+  `spatial.coverage`) and the treasury has timber. Registered between
+  `grain` and `economy` in `default_systems`, so the same month's
+  migration sees the bumped capacity.
+- `sim/systems/population.py` migration: replace the satisfaction-only
+  inflow/outflow with capacity-gated migration. Open slots = sum of
+  `house_capacity` over completed insulae minus current plebs;
+  `inflow = min(open_slots, MIGRATION_BASE_RATE * sat)` per month
+  (where `MIGRATION_BASE_RATE = 5.0`). Below `sat = 0.3` or with no
+  open slots, plebs flow out. Births/deaths untouched (no-op at 0
+  pop, ambient growth once seeded).
+- `sim/systems/grain.py` meal demand distribution switched from
+  `HOUSING_CAPACITY[INSULA]` to `house_capacity(h)` so tier-bumped
+  capacity flows through to per-house meal share.
+- Inspector renders the insula tier and tier-adjusted capacity.
+
+### Out of scope (deferred)
+- Fountains/aqueducts/water amenities — only road counts as amenity for
+  now. All tiers currently demand only "road within reach"; future
+  tiers will demand water and civic buildings to differentiate them.
+- DOMUS in build menu / patrician migration. The DOMUS branch in code
+  is harmless (it just stays at 0 pop forever).
+- Tier degradation if amenities removed — one-way upgrades.
+
+---
+
 ## 2026-05-02 — MVP simplification: peaceful builder, two-tier population
 
 Cut the agents and military layers entirely so MVP focuses on pool-based
