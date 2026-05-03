@@ -19,7 +19,11 @@ from spqr.engine.tick import Engine
 from spqr.engine.world import SPEED_TICKS_PER_SEC, GameState, Speed
 from spqr.persistence import load_from_path, save_to_path
 from spqr.sim.systems import default_systems
-from spqr.ui.screens.build_menu import BuildMenuScreen
+from spqr.ui.screens.build_menu import (
+    BuildCategoryScreen,
+    BuildMenuResult,
+    BuildMenuScreen,
+)
 from spqr.ui.screens.config import ConfigResult, ConfigScreen
 from spqr.ui.screens.info import GraphScreen, InfoResult, InfoScreen
 from spqr.ui.screens.population import PopulationScreen
@@ -135,6 +139,11 @@ class SpqrApp(App):
         self._refresh_widgets()
 
     def _refresh_widgets(self) -> None:
+        # Update footprint preview before refreshing — when the OFFICE
+        # tool is active, the cursor needs to show its 2×2 landing
+        # zone in green (or red if blocked).
+        if self._city_map is not None:
+            self._city_map.pending_footprint = self._compute_pending_footprint()
         if self._city_map is not None and self._city_map.display:
             self._city_map.refresh()
         if self._region_map is not None and self._region_map.display:
@@ -147,6 +156,23 @@ class SpqrApp(App):
             self._inspector.set_cursor(
                 self._city_map.cursor_x, self._city_map.cursor_y
             )
+
+    def _compute_pending_footprint(self) -> frozenset[tuple[int, int]] | None:
+        """Tiles to highlight as the active brush's landing zone.
+        Returns None unless a fixed-shape tool is selected. OFFICE is
+        the only one today; future multi-tile builds plug in here."""
+        if self._city_map is None or self._zone_tool is None:
+            return None
+        if self._zone_tool != ZoneKind.OFFICE:
+            return None
+        from spqr.sim.models import OFFICE_FOOTPRINT_H, OFFICE_FOOTPRINT_W
+
+        cx, cy = self._city_map.cursor_x, self._city_map.cursor_y
+        return frozenset(
+            (cx + dx, cy + dy)
+            for dy in range(OFFICE_FOOTPRINT_H)
+            for dx in range(OFFICE_FOOTPRINT_W)
+        )
 
     def watch_view_mode(self, mode: str) -> None:
         if self._city_map is None or self._region_map is None:
@@ -181,14 +207,33 @@ class SpqrApp(App):
         self._city_map.move_cursor(dx, dy)
 
     def action_build_menu(self) -> None:
-        # Pass the current tool so escape returns it unchanged. The callback
-        # always treats the dismiss value as the new tool, even if it equals
-        # the old one.
+        # Pass the current tool so escape returns it unchanged. The
+        # top-level callback handles either a "tool" pick (set the
+        # brush) or a "category" pick (open submenu).
         self.push_screen(
-            BuildMenuScreen(self._zone_tool), self._on_build_menu_dismissed
+            BuildMenuScreen(self._zone_tool),
+            self._on_build_menu_dismissed,
         )
 
-    def _on_build_menu_dismissed(self, new_tool: ZoneKind | None) -> None:
+    def _on_build_menu_dismissed(self, result: BuildMenuResult | None) -> None:
+        if result is None:
+            return
+        if result.kind == "category" and result.category is not None:
+            # Top-level picked a category; open the matching submenu.
+            # The submenu's callback feeds back into _set_zone_tool,
+            # so two cancels are needed to fully back out (one to
+            # dismiss the submenu, one to dismiss the top — but our
+            # submenu cancel returns the current tool unchanged, so
+            # there's nothing to undo).
+            self.push_screen(
+                BuildCategoryScreen(result.category, self._zone_tool),
+                self._set_zone_tool,
+            )
+            return
+        # kind == "tool"
+        self._set_zone_tool(result.tool)
+
+    def _set_zone_tool(self, new_tool: ZoneKind | None) -> None:
         if new_tool == self._zone_tool:
             return
         self._zone_tool = new_tool
@@ -249,6 +294,26 @@ class SpqrApp(App):
             from spqr.engine.commands import SetFarmCrop
 
             self.engine.submit(SetFarmCrop(result.farm_id, int(result.crop)))
+        elif (
+            result.kind == "set_tier_cap"
+            and result.building_id is not None
+            and result.tier_cap is not None
+        ):
+            from spqr.engine.commands import SetResidenceTierCap
+
+            self.engine.submit(
+                SetResidenceTierCap(result.building_id, result.tier_cap)
+            )
+        elif (
+            result.kind == "set_good"
+            and result.building_id is not None
+            and result.good is not None
+        ):
+            from spqr.engine.commands import SetWorkshopGood
+
+            self.engine.submit(
+                SetWorkshopGood(result.building_id, int(result.good))
+            )
 
     def _set_range_highlight(self, granary_id: int) -> None:
         from spqr.sim.models import GRANARY_REACH_COST
@@ -291,6 +356,13 @@ class SpqrApp(App):
         if self.view_mode != "city":
             return
         cx, cy = self._city_map.cursor_x, self._city_map.cursor_y
+        # Office is a fixed 2×2 footprint; no rectangle drag. Fire the
+        # placement immediately on the first Enter press.
+        if self._zone_tool == ZoneKind.OFFICE:
+            self.engine.submit(
+                PlaceZoneRect(x1=cx, y1=cy, x2=cx, y2=cy, kind=ZoneKind.OFFICE)
+            )
+            return
         if self._drag_anchor is None:
             # First press: set the anchor; the rectangle preview will follow
             # the cursor until enter is pressed again or escape cancels.

@@ -5,8 +5,9 @@ from dataclasses import dataclass
 
 
 class ZoneKind(enum.IntEnum):
-    """Player-placeable zones — a subset of BuildingKind that the user can
-    designate. Construction systems will fill these out over time."""
+    """Player-placeable zones — a subset of BuildingKind that the user
+    can designate, plus two destructive tools (UNDESIGNATE and
+    BULLDOZE) that remove buildings instead of placing them."""
     FARM = 0
     RESIDENCE = 1
     GRANARY = 2
@@ -15,6 +16,9 @@ class ZoneKind(enum.IntEnum):
     WAREHOUSE = 5
     LUMBER_MILL = 6
     QUARRY = 7
+    OFFICE = 8
+    UNDESIGNATE = 9      # cancel an under-construction designation
+    BULLDOZE = 10        # demolish a completed building, salvage materials
 
 
 @dataclass(slots=True)
@@ -63,6 +67,28 @@ class SetFarmCrop:
     crop: int
 
 
+@dataclass(slots=True)
+class SetResidenceTierCap:
+    """Cap a residence's auto-upgrade ceiling. tier_cap is in 0..3
+    (RESIDENCE_MAX_TIER). The housing system stops upgrading the
+    residence once `tier == tier_cap`, even if materials and roads
+    would otherwise advance it. No-op if the building isn't a
+    RESIDENCE. Lowering the cap below the current tier is allowed but
+    does NOT downgrade — it just prevents future upgrades."""
+    building_id: int
+    tier_cap: int
+
+
+@dataclass(slots=True)
+class SetWorkshopGood:
+    """Change a workshop's good. good is a Good IntEnum value
+    (0=FURNITURE, 1=STONEWARE). No-op if the building isn't a
+    WORKSHOP. Switching is instant — workshops have no in-progress
+    batch state to discard."""
+    building_id: int
+    good: int
+
+
 Command = (
     TogglePause
     | SetSpeed
@@ -71,4 +97,6 @@ Command = (
     | SetTaxRate
     | SetGrainDole
     | SetFarmCrop
+    | SetResidenceTierCap
+    | SetWorkshopGood
 )

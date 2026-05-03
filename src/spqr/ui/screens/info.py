@@ -131,7 +131,7 @@ def _render_generic_info(b) -> Text:  # type: ignore[no-untyped-def]
     text.append(f"   ({b.x}, {b.y})\n\n", style="grey50")
     text.append(f"  Completion:  {int(b.completion * 100)}%\n", style="grey70")
     text.append(f"  Workers:     {b.workers_assigned}\n", style="grey70")
-    text.append("\n[dim]escape / i to close[/]\n")
+    text.append("\nescape / i to close\n", style="dim")
     return text
 
 
@@ -176,9 +176,13 @@ def _render_granary_info(state: GameState, city: City, b) -> Text:  # type: igno
     )
     text.append("\n")
 
-    text.append("  [bright_yellow]R[/]  Highlight range on city map\n")
-    text.append("  [bright_yellow]G[/]  Inventory graph\n\n")
-    text.append("[dim]escape / i to close[/]\n")
+    text.append("  ")
+    text.append("R", style="bright_yellow")
+    text.append("  Highlight range on city map\n")
+    text.append("  ")
+    text.append("G", style="bright_yellow")
+    text.append("  Inventory graph\n\n")
+    text.append("escape / i to close\n", style="dim")
     return text
 
 
@@ -200,7 +204,7 @@ def _render_farm_info(b) -> Text:  # type: ignore[no-untyped-def]
         b.grain_stored if b.crop == int(Crop.WHEAT) else b.vegetables_stored
     )
     text.append(f"  In transit:  {in_transit:.0f}\n", style="grey70")
-    text.append("\n[dim]press c to change crop  ·  escape / i to close[/]\n")
+    text.append("\npress c to change crop  ·  escape / i to close\n", style="dim")
     return text
 
 
@@ -289,7 +293,8 @@ def _render_residence_info(city: City, b) -> Text:  # type: ignore[no-untyped-de
     else:
         text.append("no", style="red")
         text.append("  (no road buff)", style="grey50")
-    text.append("\n\n[dim]escape / i to close[/]\n")
+    text.append("\n\n")
+    text.append("escape / i to close\n", style="dim")
     return text
 
 
@@ -385,7 +390,7 @@ def _render_graph(b, daily: bool) -> Text:  # type: ignore[no-untyped-def]
     samples = list(b.inventory_history)
     if not samples:
         text.append("  (no history yet — let the sim run)\n", style="grey70")
-        text.append("\n[dim]d to toggle daily/hourly  ·  esc to close[/]\n")
+        text.append("\nd to toggle daily/hourly  ·  esc to close\n", style="dim")
         return text
 
     if daily:
@@ -443,5 +448,5 @@ def _render_graph(b, daily: bool) -> Text:  # type: ignore[no-untyped-def]
         style="grey50",
     )
 
-    text.append("\n[dim]d to toggle daily/hourly  ·  esc to close[/]\n")
+    text.append("\nd to toggle daily/hourly  ·  esc to close\n", style="dim")
     return text

@@ -20,6 +20,7 @@ class BuildingKind(enum.IntEnum):
     WAREHOUSE = 9        # general materials storage
     LUMBER_MILL = 10     # produces timber from forest tiles
     QUARRY = 11          # produces stone from rock tiles
+    OFFICE = 12          # admin reach + tax collection; gates cottages
 
 
 class Crop(enum.IntEnum):
@@ -27,6 +28,15 @@ class Crop(enum.IntEnum):
     a placeholder slot — buildable and switchable but no consumer yet."""
     WHEAT = 0
     VEGETABLES = 1
+
+
+class Good(enum.IntEnum):
+    """What a workshop is producing. Furniture consumes timber;
+    stoneware consumes stone. Both produce into the treasury as
+    aggregate stockpiles. Future iterations will add consumers (e.g.
+    domus demand for furniture, civic projects for stoneware)."""
+    FURNITURE = 0
+    STONEWARE = 1
 
 
 # Capacity in housing units (people housed) by building kind. RESIDENCE is
@@ -44,6 +54,7 @@ WORKER_SLOTS: dict[BuildingKind, int] = {
     BuildingKind.FORUM: 2,
     BuildingKind.LUMBER_MILL: 2,
     BuildingKind.QUARRY: 2,
+    BuildingKind.OFFICE: 3,
 }
 
 # Builder slots — workers needed to advance construction. A FARM site needs
@@ -57,6 +68,7 @@ BUILDER_SLOTS: dict[BuildingKind, int] = {
     BuildingKind.WAREHOUSE: 2,
     BuildingKind.LUMBER_MILL: 2,
     BuildingKind.QUARRY: 2,
+    BuildingKind.OFFICE: 2,
     BuildingKind.DOMUS: 3,
     BuildingKind.FORUM: 4,
     BuildingKind.TEMPLE: 4,
@@ -73,6 +85,7 @@ BUILD_HOURS: dict[BuildingKind, int] = {
     BuildingKind.RESIDENCE: 240,
     BuildingKind.WORKSHOP: 240,
     BuildingKind.QUARRY: 240,
+    BuildingKind.OFFICE: 240,
     BuildingKind.WAREHOUSE: 300,
     BuildingKind.DOMUS: 360,
     BuildingKind.FORUM: 600,
@@ -90,6 +103,7 @@ BUILDING_COST: dict[BuildingKind, Resources] = {
     BuildingKind.WORKSHOP:    Resources(denarii=60,  timber=15, stone=10, grain=0),
     BuildingKind.LUMBER_MILL: Resources(denarii=80,  timber=0,  stone=10, grain=0),
     BuildingKind.WAREHOUSE:   Resources(denarii=80,  timber=20, stone=0,  grain=0),
+    BuildingKind.OFFICE:      Resources(denarii=80,  timber=10, stone=10, grain=0),
     BuildingKind.DOMUS:       Resources(denarii=100, timber=20, stone=30, grain=0),
     BuildingKind.QUARRY:      Resources(denarii=100, timber=20, stone=0,  grain=0),
     BuildingKind.TEMPLE:      Resources(denarii=150, timber=20, stone=40, grain=0),
@@ -112,18 +126,20 @@ STORAGE_CAPACITY: dict[BuildingKind, int] = {
 # Outside this window, farms tick maturity nowhere even with full crew.
 GROWING_SEASON_MONTHS: frozenset[int] = frozenset({3, 4, 5, 6, 7, 8, 9})
 
-# Per-crop tuning. Wheat is the staple: 1 worker, monthly harvest cycle
-# (1 worker × 720h = 720 worker-hours), yield calibrated so a single
-# wheat farm sustains one tier-1 (huts, 6 plebs) house year-round even
-# accounting for the 7-month growing season — 7 × 150 = 1050 grain/year
-# vs. 6 × 0.48 × 365 ≈ 1051 grain/year demand.
+# Per-crop tuning. Both crops cap at 3 workers; harvest frequency
+# scales linearly with workers via grain.py's maturity advance
+# (`workers / hours_per_harvest`). Yield per harvest is fixed — more
+# workers means more cycles per year, not bigger harvests. With 1
+# worker a wheat farm matches the original "1 harvest/month" pace and
+# sustains one tier-1 hut; with 3 workers it harvests 3× faster and
+# can sustain a small cottage or a few huts.
 CROP_WORKER_SLOTS: dict[int, int] = {
-    int(Crop.WHEAT): 1,
-    int(Crop.VEGETABLES): 4,
+    int(Crop.WHEAT): 3,
+    int(Crop.VEGETABLES): 3,
 }
 CROP_WORKER_HOURS_PER_HARVEST: dict[int, int] = {
-    int(Crop.WHEAT): 720,         # 1 worker × 720 = 1 harvest/month
-    int(Crop.VEGETABLES): 480,    # 4 workers × 120 = 1 harvest per ~5 days
+    int(Crop.WHEAT): 720,         # 1 worker × 720 = 1 harvest/month; 3 workers ≈ 10 days
+    int(Crop.VEGETABLES): 480,    # 3 workers × 160 ≈ 1 harvest/week
 }
 CROP_YIELD_PER_HARVEST: dict[int, float] = {
     int(Crop.WHEAT): 150.0,
@@ -164,6 +180,33 @@ GRAIN_TRANSPORT_RATE: float = 8.0
 # this works out to ~5 Manhattan tiles; with a road network, ~12.
 GRANARY_REACH_COST: float = 12.0
 FARM_TRANSPORT_REACH_COST: float = 16.0
+
+# Office reach scales linearly with assigned workers. With 1 worker the
+# reach is 6 (a small neighborhood); with 3 workers it's 18 (a full
+# district). Used by housing (cottage tier gate) and economy (taxation).
+# The same Dijkstra primitive backs the reach as granaries — roads
+# extend it, water/rock blocks it.
+OFFICE_REACH_PER_WORKER: float = 6.0
+
+# Offices occupy a 2×2 footprint. Placement requires all four tiles
+# (anchor, anchor+x, anchor+y, anchor+xy) to be buildable; cost is
+# paid once. All four tile.building_ids point to the same office
+# building, so the inspector resolves to the same struct from any
+# corner — no special "find the anchor" logic in the UI.
+OFFICE_FOOTPRINT_W: int = 2
+OFFICE_FOOTPRINT_H: int = 2
+
+
+# Demolition tools.
+# Undesignate is free: it cancels an in-progress designation and
+# refunds 100% of the BUILDING_COST. Only applies to buildings still
+# under construction (b.is_under_construction).
+# Bulldoze is the after-the-fact demolisher: costs BULLDOZE_DENARII_COST
+# per building (paid once even for multi-tile structures like office),
+# refunds BULLDOZE_REFUND_FRACTION of the original timber+stone cost.
+# Denarii are NOT refunded — they're considered sunk into operations.
+BULLDOZE_DENARII_COST: float = 10.0
+BULLDOZE_REFUND_FRACTION: float = 0.5
 
 
 # Per-class meal mechanics. Meals are discrete events scheduled by tick:
@@ -239,6 +282,15 @@ RESIDENCE_AMENITY_REACH_COST: float = 4.0
 ROAD_DESIRABILITY_RADIUS: int = 2
 ROAD_DESIRABILITY_BONUS_PER_MONTH: float = 0.02
 
+# Industrial nuisance. Residences within INDUSTRIAL_NUISANCE_RADIUS
+# (Chebyshev) of any completed quarry or lumber mill suffer two
+# effects: (a) tier capped at huts (cottages and insulae are unwilling
+# to put up with the smoke and noise), (b) a monthly satisfaction
+# penalty proportional to the fraction of district residences in the
+# nuisance zone. Mirrors the road-desirability mechanic but inverted.
+INDUSTRIAL_NUISANCE_RADIUS: int = 4
+INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH: float = 0.04
+
 
 # Industry — material production buildings. Lumber mills produce timber,
 # quarries produce stone. Both halt when total city materials
@@ -247,6 +299,14 @@ ROAD_DESIRABILITY_BONUS_PER_MONTH: float = 0.02
 # "yields are stored in warehouse" rule means in practice.
 LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK: float = 0.05
 QUARRY_STONE_PER_WORKER_PER_TICK: float = 0.04
+
+# Workshop tuning. Each worker tick consumes INPUT of the goods'
+# raw material (timber for furniture, stone for stoneware) from the
+# city treasury and produces OUTPUT of the finished good. Production
+# halts entirely when the input pool is empty — no partial yields.
+# Output rate is slightly less than input rate, representing waste.
+WORKSHOP_INPUT_PER_WORKER_PER_TICK: float = 0.03
+WORKSHOP_OUTPUT_PER_WORKER_PER_TICK: float = 0.02
 
 
 def hours_until_next_meal(tick: int, cls: int) -> int:
@@ -278,8 +338,20 @@ class Building(msgspec.Struct, frozen=False):
     vegetables_stored: float = 0.0
     # House upgrade tier (0..RESIDENCE_MAX_TIER). Meaningless on other kinds.
     tier: int = 0
+    # Player-set tier ceiling for RESIDENCE buildings. The housing system
+    # stops upgrading once `tier == tier_cap`. Default = RESIDENCE_MAX_TIER
+    # (3) means "no cap, upgrade as far as the city can support."
+    # Meaningless on other building kinds. The cap can be lowered to
+    # freeze a residence at huts or cottages even when materials and
+    # roads would otherwise advance it; useful for keeping a low-density
+    # neighborhood from densifying into insulae.
+    tier_cap: int = 3
     # Crop sown on a farm (Crop IntEnum value). Meaningless on other kinds.
     crop: int = 0
+    # Good produced by a workshop (Good IntEnum value: 0=furniture,
+    # 1=stoneware). Meaningless on other kinds. Workshop consumes the
+    # corresponding raw material from treasury per worker per tick.
+    good: int = 0
     # Per-tick inventory snapshots, only used by granaries. Bounded to
     # GRANARY_HISTORY_MAX_SAMPLES; older samples are discarded as new
     # ones arrive. Used by the inspector "Info → graph" view.

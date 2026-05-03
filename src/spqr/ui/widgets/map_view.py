@@ -48,6 +48,7 @@ BUILDING_GLYPH: dict[BuildingKind, tuple[str, str]] = {
     BuildingKind.WAREHOUSE: ("S", "bright_cyan"),
     BuildingKind.LUMBER_MILL: ("L", "yellow"),
     BuildingKind.QUARRY: ("Q", "grey70"),
+    BuildingKind.OFFICE: ("O", "bright_blue"),
 }
 
 REGION_BIOME_GLYPH: dict[RegionBiome, tuple[str, str]] = {
@@ -82,6 +83,10 @@ class CityMap(Widget):
         self.drag_anchor: tuple[int, int] | None = None
         # When set, these tiles render with a teal "in range" background.
         self.range_highlight: frozenset[tuple[int, int]] | None = None
+        # Tiles to highlight as "where this building will land" before
+        # the player commits with Enter. Currently used by the OFFICE
+        # tool to show its 2×2 footprint at the cursor.
+        self.pending_footprint: frozenset[tuple[int, int]] | None = None
 
     def render(self) -> Text:
         return _render_city(
@@ -90,6 +95,7 @@ class CityMap(Widget):
             self.cursor_y,
             self.drag_anchor,
             range_highlight=self.range_highlight,
+            pending_footprint=self.pending_footprint,
         )
 
     def move_cursor(self, dx: int, dy: int) -> None:
@@ -118,10 +124,16 @@ def _render_city(
     *,
     flash_show_building: bool | None = None,
     range_highlight: frozenset[tuple[int, int]] | None = None,
+    pending_footprint: frozenset[tuple[int, int]] | None = None,
 ) -> Text:
     """Render the city tilemap. Pass `flash_show_building` explicitly in
     tests; in production it's derived from the wall clock so construction
-    sites animate even while the sim is paused."""
+    sites animate even while the sim is paused.
+
+    `pending_footprint` shows the player where a fixed-shape brush
+    (currently OFFICE 2×2) will land if Enter is pressed now.
+    Highlighted tiles render dark-green if all are buildable, dark-red
+    if any are blocked — same colour scheme as the rectangle drag."""
     if flash_show_building is None:
         flash_show_building = (
             int(time.monotonic() / _FLASH_PHASE_SECONDS) % 2
@@ -133,6 +145,14 @@ def _render_city(
         ry_lo, ry_hi = min(ay, cur_y), max(ay, cur_y)
     else:
         rx_lo = ry_lo = rx_hi = ry_hi = -1
+
+    # If the entire footprint is buildable the preview is green; one
+    # blocked tile turns the whole footprint red so the player gets a
+    # single, unambiguous all-or-nothing signal.
+    footprint_ok = (
+        pending_footprint is not None
+        and all(city.is_buildable(fx, fy) for fx, fy in pending_footprint)
+    )
 
     full_residence_ids = _full_residence_ids(city)
 
@@ -159,6 +179,12 @@ def _render_city(
             # Range highlight underlies drag and cursor — drag/cursor wins.
             if range_highlight is not None and (x, y) in range_highlight:
                 style = Style(color=color, bgcolor="dark_cyan")
+            in_footprint = (
+                pending_footprint is not None and (x, y) in pending_footprint
+            )
+            if in_footprint:
+                bg = "dark_green" if footprint_ok else "dark_red"
+                style = Style(color=color, bgcolor=bg)
             in_rect = (
                 drag_anchor is not None
                 and rx_lo <= x <= rx_hi

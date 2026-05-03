@@ -15,16 +15,21 @@ from spqr.sim.models import (
     GRAIN_PER_MEAL,
     GRANARY_CAPACITY,
     GROWING_SEASON_MONTHS,
+    INDUSTRIAL_NUISANCE_RADIUS,
     LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK,
+    OFFICE_REACH_PER_WORKER,
     QUARRY_STONE_PER_WORKER_PER_TICK,
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
     MEAL_INTERVAL_HOURS,
     STORAGE_CAPACITY,
     WAREHOUSE_VEGETABLES_CAPACITY,
+    WORKSHOP_INPUT_PER_WORKER_PER_TICK,
+    WORKSHOP_OUTPUT_PER_WORKER_PER_TICK,
     BuildingKind,
     City,
     Crop,
+    Good,
     hours_until_next_meal,
 )
 
@@ -140,6 +145,10 @@ def _render_building(city: City, x: int, y: int, current_month: int, current_tic
             _render_warehouse_veg(text, b)
         if b.kind in (BuildingKind.LUMBER_MILL, BuildingKind.QUARRY):
             _render_industry(text, city, b)
+        if b.kind == BuildingKind.OFFICE:
+            _render_office(text, b)
+        if b.kind == BuildingKind.WORKSHOP:
+            _render_workshop(text, city, b)
         if b.kind in (BuildingKind.RESIDENCE, BuildingKind.DOMUS):
             _render_residence_meals(text, city, b, current_tick)
 
@@ -210,6 +219,48 @@ def _render_industry(text: Text, city: City, b) -> None:  # type: ignore[no-unty
     text.append("\n")
 
 
+def _render_office(text: Text, b) -> None:  # type: ignore[no-untyped-def]
+    """Office reach + tax-coverage hint. Reach scales with assigned
+    workers; an idle office covers nothing."""
+    text.append("Reach:      ", style="grey70")
+    if b.workers_assigned == 0:
+        text.append("0 (idle)", style="red")
+        text.append("  (no workers — no admin)\n", style="grey50")
+        return
+    reach = OFFICE_REACH_PER_WORKER * b.workers_assigned
+    text.append(f"{reach:.0f}", style="bright_yellow")
+    text.append(
+        f"  ({OFFICE_REACH_PER_WORKER:.0f}×{b.workers_assigned})\n",
+        style="grey50",
+    )
+
+
+def _render_workshop(text: Text, city: City, b) -> None:  # type: ignore[no-untyped-def]
+    """Workshop config snapshot: which good is produced, what it
+    consumes, and the per-tick rate at the current worker count."""
+    good = Good(b.good)
+    input_name = "timber" if good == Good.FURNITURE else "stone"
+    output_name = good.name.lower()
+    text.append("Producing:  ", style="grey70")
+    text.append(f"{output_name}\n", style="bright_yellow")
+    text.append("Consumes:   ", style="grey70")
+    text.append(f"{input_name}\n", style="grey70")
+    in_rate = WORKSHOP_INPUT_PER_WORKER_PER_TICK * b.workers_assigned
+    out_rate = WORKSHOP_OUTPUT_PER_WORKER_PER_TICK * b.workers_assigned
+    text.append("Rate:       ", style="grey70")
+    if b.workers_assigned == 0:
+        text.append("idle", style="red")
+        text.append("  (no workers)\n", style="grey50")
+    else:
+        text.append(f"{in_rate:.2f} in / {out_rate:.2f} out per hr\n", style="bright_yellow")
+    # Treasury aggregate of the produced good.
+    stocked = (
+        city.treasury.furniture if good == Good.FURNITURE else city.treasury.stoneware
+    )
+    text.append("City stock: ", style="grey70")
+    text.append(f"{stocked:.0f} {output_name}\n", style="white")
+
+
 def _render_warehouse_veg(text: Text, b) -> None:  # type: ignore[no-untyped-def]
     text.append("Vegetables: ", style="grey70")
     pct = b.vegetables_stored / max(WAREHOUSE_VEGETABLES_CAPACITY, 1.0)
@@ -223,9 +274,15 @@ def _render_warehouse_veg(text: Text, b) -> None:  # type: ignore[no-untyped-def
 def _render_residence_meals(text: Text, city: City, b, current_tick: int) -> None:  # type: ignore[no-untyped-def]
     """Lean residence summary. Per-source granary/warehouse stocks
     moved to the (i)nfo panel; here we just show the high-level food
-    access count and the next meal time."""
+    access count, the next meal time, and any active penalties
+    (industrial nuisance) the player needs to know about."""
     from spqr.sim.systems.spatial import coverage
     from spqr.sim.models import GRANARY_REACH_COST
+
+    if _near_industrial_nuisance(city, b):
+        text.append("Near industry: ", style="grey70")
+        text.append("yes", style="red")
+        text.append("  (caps at huts, drags satisfaction)\n", style="grey50")
 
     grain_in_reach = 0.0
     veg_in_reach = 0.0
@@ -338,3 +395,16 @@ def _residence_occupancy(city: City, b) -> int:  # type: ignore[no-untyped-def]
                 return min(cap, occupancy)
         return 0
     return 0
+
+
+def _near_industrial_nuisance(city: City, b) -> bool:  # type: ignore[no-untyped-def]
+    """True if a quarry or lumber mill sits within
+    INDUSTRIAL_NUISANCE_RADIUS (Chebyshev) tiles of this residence.
+    Used to flag the inspector with a 'caps at huts' warning so the
+    player can see why a residence isn't upgrading."""
+    radius = INDUSTRIAL_NUISANCE_RADIUS
+    for kind in (BuildingKind.LUMBER_MILL, BuildingKind.QUARRY):
+        for src in city.completed_of(kind):
+            if abs(src.x - b.x) <= radius and abs(src.y - b.y) <= radius:
+                return True
+    return False

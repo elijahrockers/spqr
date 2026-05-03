@@ -33,12 +33,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="In headless mode, only print the final state hash",
     )
+    parser.add_argument(
+        "--no-splash",
+        action="store_true",
+        help=(
+            "Skip the start-of-game splash and bootstrap directly with "
+            "the existing-village default. Useful for scripted launches."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.load:
         state = load_from_path(args.load)
-    else:
+    elif args.headless or args.no_splash:
+        # Headless and scripted launches both use the default
+        # `seed_starter=True` (existing-village) behaviour.
         state = new_game(seed=args.seed)
+    else:
+        # Lazy-import so headless runs don't pull in a TUI.
+        from spqr.ui.splash import run_splash
+
+        choice = run_splash()
+        if choice is None or choice == "quit":
+            return 0
+        state = new_game(
+            seed=args.seed,
+            seed_starter=(choice == "existing"),
+        )
 
     if args.headless:
         engine = Engine(state, default_systems())

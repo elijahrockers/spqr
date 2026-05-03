@@ -22,25 +22,42 @@ CITY_W = 60
 CITY_H = 30
 
 
-# Compact 6×3 starter block:
-#   row 0:  F F F G W L     (3 farms, granary, warehouse, lumber mill)
-#   row 1:  = = = = = =     (paved road across the middle)
-#   row 2:  R R R F F F     (3 residences, 3 more farms)
-# Total: 6 farms, 3 residences, 1 granary, 1 warehouse, 1 lumber mill,
-# 6 road tiles.
+# 11×3 starter block. The lumber mill and quarry are pushed all the
+# way to the right so they sit > INDUSTRIAL_NUISANCE_RADIUS (4)
+# Chebyshev tiles from every residence — without that buffer the
+# residences would cap at huts from day one.
+#
+#   col:     0 1 2 3 4 5 6 7 8 9 10
+#   row 0:   F F F G W . . . . L  Q
+#   row 1:   = = = = = = = = = =  =
+#   row 2:   R R R F F F . . . .  .
+#
+# Closest residence (2, 2) to mill (9, 0): max(7, 2) = 7 — safely out
+# of nuisance range.
 _STARTER_LAYOUT: list[tuple[BuildingKind, int, int]] = [
+    # Row 0 — production cluster on the left, industry on the right
     (BuildingKind.FARM,        0, 0),
     (BuildingKind.FARM,        1, 0),
     (BuildingKind.FARM,        2, 0),
     (BuildingKind.GRANARY,     3, 0),
     (BuildingKind.WAREHOUSE,   4, 0),
-    (BuildingKind.LUMBER_MILL, 5, 0),
+    (BuildingKind.LUMBER_MILL, 9, 0),
+    (BuildingKind.QUARRY,     10, 0),
+    # Row 1 — paved road spans the whole strip, connecting industry
+    # to the rest of the block.
     (BuildingKind.ROAD,        0, 1),
     (BuildingKind.ROAD,        1, 1),
     (BuildingKind.ROAD,        2, 1),
     (BuildingKind.ROAD,        3, 1),
     (BuildingKind.ROAD,        4, 1),
     (BuildingKind.ROAD,        5, 1),
+    (BuildingKind.ROAD,        6, 1),
+    (BuildingKind.ROAD,        7, 1),
+    (BuildingKind.ROAD,        8, 1),
+    (BuildingKind.ROAD,        9, 1),
+    (BuildingKind.ROAD,       10, 1),
+    # Row 2 — residences on the left, farms middle. Right end empty
+    # so the player has somewhere to put an office.
     (BuildingKind.RESIDENCE,   0, 2),
     (BuildingKind.RESIDENCE,   1, 2),
     (BuildingKind.RESIDENCE,   2, 2),
@@ -48,7 +65,7 @@ _STARTER_LAYOUT: list[tuple[BuildingKind, int, int]] = [
     (BuildingKind.FARM,        4, 2),
     (BuildingKind.FARM,        5, 2),
 ]
-_STARTER_BLOCK_W = 6
+_STARTER_BLOCK_W = 11
 _STARTER_BLOCK_H = 3
 
 
@@ -124,9 +141,11 @@ def generate_city(
     seed_starter: bool = True,
 ) -> City:
     """Build a city with random terrain. With `seed_starter=True`
-    (the production default), drop a compact starter block of farms +
-    residences + granary + warehouse + lumber mill + road into the most
-    central buildable area. Tests that need a clean slate pass
+    (the production default), drop an 11×3 starter block of residences
+    + farms + granary + warehouse + lumber mill + quarry + road into
+    the most central buildable area. Industrial buildings sit at the
+    far right of the block so residences are outside
+    INDUSTRIAL_NUISANCE_RADIUS. Tests that need a clean slate pass
     `seed_starter=False`."""
     terrain = _terrain_field(rng)
     tiles = [

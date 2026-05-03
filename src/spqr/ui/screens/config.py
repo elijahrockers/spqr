@@ -1,12 +1,17 @@
 """Configuration modal — bound to the 'c' hotkey on the main map.
 
-Per building kind, presents the configurable options. Today only farms
-have anything to configure (which crop is sown). Other kinds open with a
-"nothing to configure" hint so the dialog is still discoverable.
+Per building kind, presents the configurable options:
+  - FARM: which crop is sown. Switching past CROP_SWITCH_CONFIRM_THRESHOLD
+    maturity prompts y/n confirmation since standing growth is discarded.
+  - RESIDENCE: tier ceiling. The housing system stops upgrading once
+    the residence reaches `tier_cap`. Useful for keeping a low-density
+    neighborhood (huts/cottages) from densifying into insulae even
+    when materials and roads are available.
+  - WORKSHOP: which good is produced. Furniture consumes timber;
+    stoneware consumes stone. Switching is instant.
 
-For a farm, picking a different crop confirms first if the standing crop
-is more than CROP_SWITCH_CONFIRM_THRESHOLD mature — switching away
-discards in-progress growth, which is annoying if it's almost ripe."""
+Other building kinds open with a "nothing to configure" hint so the
+dialog is still discoverable everywhere."""
 
 from __future__ import annotations
 
@@ -21,8 +26,12 @@ from textual.widget import Widget
 
 from spqr.engine.world import GameState
 from spqr.sim.models import (
+    RESIDENCE_MAX_TIER,
+    RESIDENCE_TIER_CAPACITY,
+    RESIDENCE_TIER_NAME,
     BuildingKind,
     Crop,
+    Good,
 )
 
 
@@ -36,12 +45,19 @@ class ConfigResult:
     """Returned by ConfigScreen on dismiss.
 
     `kind` is one of:
-      "close"    — modal dismissed; no further action
-      "set_crop" — App should apply `crop` to the farm `farm_id`
+      "close"        — modal dismissed; no further action
+      "set_crop"     — App should apply `crop` to the farm `farm_id`
+      "set_tier_cap" — App should set RESIDENCE `building_id`'s
+                       tier_cap to `tier_cap`
+      "set_good"     — App should set WORKSHOP `building_id`'s good
+                       to `good`
     """
     kind: str
     farm_id: int | None = None
     crop: Crop | None = None
+    building_id: int | None = None
+    tier_cap: int | None = None
+    good: Good | None = None
 
 
 class _ConfigBody(Widget):
@@ -66,6 +82,10 @@ class _ConfigBody(Widget):
         b = city.buildings[self.building_id]
         if b.kind == BuildingKind.FARM:
             return _render_farm_config(b, self.pending_crop)
+        if b.kind == BuildingKind.RESIDENCE:
+            return _render_residence_config(b)
+        if b.kind == BuildingKind.WORKSHOP:
+            return _render_workshop_config(b)
         return _render_no_config(b)
 
 
@@ -86,15 +106,45 @@ class ConfigScreen(ModalScreen[ConfigResult]):
     }
     """
 
+    # Character hotkeys instead of numeric. Same dispatcher routes
+    # both crop selection (FARM: w=wheat, v=vegetables) and tier-cap
+    # selection (RESIDENCE: u=undeveloped, h=huts, o=cOttages, i=insula).
+    # `c`-close conflicts with cottages; `o` (second letter) avoids it.
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("c", "close", "Close"),
         Binding("q", "close", "Close"),
-        Binding("1", "pick_crop('0')", "Wheat", show=False),
-        Binding("2", "pick_crop('1')", "Vegetables", show=False),
         Binding("y", "confirm", "Confirm", show=False),
         Binding("n", "cancel_pending", "Cancel", show=False),
+        # Farm crop picker
+        Binding("w", "pick_char('w')", show=False),
+        Binding("v", "pick_char('v')", show=False),
+        # Residence tier-cap picker
+        Binding("u", "pick_char('u')", show=False),
+        Binding("h", "pick_char('h')", show=False),
+        Binding("o", "pick_char('o')", show=False),
+        Binding("i", "pick_char('i')", show=False),
+        # Workshop good picker
+        Binding("f", "pick_char('f')", show=False),
+        Binding("s", "pick_char('s')", show=False),
     ]
+
+    # Character hotkey → crop / tier_cap / good value. Source of truth
+    # for both the binding handlers and the renderers.
+    _FARM_KEY_TO_CROP: dict[str, "Crop"] = {
+        "w": Crop.WHEAT,
+        "v": Crop.VEGETABLES,
+    }
+    _RESIDENCE_KEY_TO_TIER_CAP: dict[str, int] = {
+        "u": 0,  # undeveloped
+        "h": 1,  # huts
+        "o": 2,  # cOttages
+        "i": 3,  # insula (uncapped)
+    }
+    _WORKSHOP_KEY_TO_GOOD: dict[str, "Good"] = {
+        "f": Good.FURNITURE,
+        "s": Good.STONEWARE,
+    }
 
     def __init__(self, state: GameState, building_id: int) -> None:
         super().__init__()
@@ -112,6 +162,14 @@ class ConfigScreen(ModalScreen[ConfigResult]):
         b = self.state.player_city().buildings[self.building_id]
         return b.kind == BuildingKind.FARM
 
+    def _is_residence(self) -> bool:
+        b = self.state.player_city().buildings[self.building_id]
+        return b.kind == BuildingKind.RESIDENCE
+
+    def _is_workshop(self) -> bool:
+        b = self.state.player_city().buildings[self.building_id]
+        return b.kind == BuildingKind.WORKSHOP
+
     def _refresh(self) -> None:
         # Modal may not be mounted in unit tests that drive actions
         # directly; query_one raises in that case. Guard so the action
@@ -126,10 +184,31 @@ class ConfigScreen(ModalScreen[ConfigResult]):
     def action_close(self) -> None:
         self.dismiss(ConfigResult(kind="close"))
 
-    def action_pick_crop(self, crop_value: str) -> None:
-        if not self._is_farm():
+    def action_pick_char(self, key: str) -> None:
+        """Character-key dispatcher. Routes by building kind:
+          - FARM: w=wheat, v=vegetables
+          - RESIDENCE: u/h/o/i = undeveloped/huts/cottages/insula
+          - WORKSHOP: f=furniture, s=stoneware
+        Keys irrelevant to the focused building kind are no-ops."""
+        if self._is_farm():
+            crop = self._FARM_KEY_TO_CROP.get(key)
+            if crop is None:
+                return
+            self._select_crop(crop)
             return
-        new_crop = Crop(int(crop_value))
+        if self._is_residence():
+            cap = self._RESIDENCE_KEY_TO_TIER_CAP.get(key)
+            if cap is None:
+                return
+            self._select_tier_cap(cap)
+            return
+        if self._is_workshop():
+            good = self._WORKSHOP_KEY_TO_GOOD.get(key)
+            if good is None:
+                return
+            self._select_good(good)
+
+    def _select_crop(self, new_crop: Crop) -> None:
         b = self.state.player_city().buildings[self.building_id]
         if int(b.crop) == int(new_crop):
             # No-op selection; just close.
@@ -143,6 +222,40 @@ class ConfigScreen(ModalScreen[ConfigResult]):
         self.dismiss(
             ConfigResult(kind="set_crop", farm_id=self.building_id, crop=new_crop)
         )
+
+    def _select_tier_cap(self, new_cap: int) -> None:
+        b = self.state.player_city().buildings[self.building_id]
+        if b.tier_cap == new_cap:
+            self.dismiss(ConfigResult(kind="close"))
+            return
+        self.dismiss(
+            ConfigResult(
+                kind="set_tier_cap",
+                building_id=self.building_id,
+                tier_cap=new_cap,
+            )
+        )
+
+    def _select_good(self, new_good: Good) -> None:
+        b = self.state.player_city().buildings[self.building_id]
+        if int(b.good) == int(new_good):
+            self.dismiss(ConfigResult(kind="close"))
+            return
+        self.dismiss(
+            ConfigResult(
+                kind="set_good",
+                building_id=self.building_id,
+                good=new_good,
+            )
+        )
+
+    # Compatibility shim for unit tests that drive crop selection
+    # directly. Routes through `_select_crop` so behavior stays
+    # identical to the binding path.
+    def action_pick_crop(self, crop_value: str) -> None:
+        if not self._is_farm():
+            return
+        self._select_crop(Crop(int(crop_value)))
 
     def action_confirm(self) -> None:
         if self._pending_crop is None:
@@ -180,23 +293,111 @@ def _render_farm_config(b, pending: Crop | None) -> Text:  # type: ignore[no-unt
 
     if pending is None:
         text.append("  Pick a crop:\n\n")
+        crop_to_key = {Crop.WHEAT: "w", Crop.VEGETABLES: "v"}
         for crop in Crop:
-            marker = "[bright_green]*[/]" if int(crop) == int(b.crop) else " "
-            hotkey = "1" if crop == Crop.WHEAT else "2"
-            text.append(
-                f"  {marker} [bright_yellow]{hotkey}[/]  {crop.name.lower()}\n"
-            )
-        text.append("\n[dim]escape / c to close[/]\n")
+            is_current = int(crop) == int(b.crop)
+            hotkey = crop_to_key[crop]
+            text.append("  ")
+            if is_current:
+                text.append("*", style="bright_green")
+            else:
+                text.append(" ")
+            text.append(" ")
+            text.append(hotkey, style="bright_yellow")
+            text.append(f"  {crop.name.lower()}\n")
+        text.append("\nescape / c to close\n", style="dim")
     else:
-        text.append(
-            f"  Switching to ", style="grey70"
-        )
+        text.append("  Switching to ", style="grey70")
         text.append(f"{pending.name.lower()}", style="bright_yellow")
         text.append(" will discard the\n  current ", style="grey70")
         text.append(f"{pct}% mature ", style="yellow")
         text.append(f"{current.name.lower()} crop.\n\n", style="grey70")
-        text.append("  [bright_yellow]Y[/]  Confirm switch\n")
-        text.append("  [bright_yellow]N[/]  Cancel\n")
+        text.append("  ")
+        text.append("Y", style="bright_yellow")
+        text.append("  Confirm switch\n")
+        text.append("  ")
+        text.append("N", style="bright_yellow")
+        text.append("  Cancel\n")
+    return text
+
+
+def _render_residence_config(b) -> Text:  # type: ignore[no-untyped-def]
+    text = Text()
+    text.append("CONFIGURE RESIDENCE\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:  ({b.x}, {b.y})\n", style="grey70")
+    current_name = RESIDENCE_TIER_NAME.get(b.tier, "?")
+    text.append("  Tier:      ", style="grey70")
+    text.append(
+        f"{current_name} ({b.tier}/{RESIDENCE_MAX_TIER})\n", style="bright_yellow"
+    )
+    cap_name = RESIDENCE_TIER_NAME.get(b.tier_cap, "?")
+    text.append("  Cap:       ", style="grey70")
+    if b.tier_cap >= RESIDENCE_MAX_TIER:
+        text.append("none — will keep upgrading\n", style="green")
+    else:
+        text.append(f"{cap_name} ({b.tier_cap}/{RESIDENCE_MAX_TIER})\n", style="yellow")
+    text.append("\n  Pick a tier ceiling:\n\n")
+    # Hotkeys: first letter where unique. `o` for cottages avoids the
+    # `c`-close conflict; `i` for insula doubles as "uncapped".
+    tier_to_key = {0: "u", 1: "h", 2: "o", 3: "i"}
+    for tier in range(RESIDENCE_MAX_TIER + 1):
+        tier_name = RESIDENCE_TIER_NAME.get(tier, "?")
+        capacity = RESIDENCE_TIER_CAPACITY.get(tier, 0)
+        is_current_cap = tier == b.tier_cap
+        hotkey = tier_to_key.get(tier, str(tier))
+        text.append("  ")
+        if is_current_cap:
+            text.append("*", style="bright_green")
+        else:
+            text.append(" ")
+        text.append(" ")
+        text.append(hotkey, style="bright_yellow")
+        text.append(f"  {tier_name:<12}")
+        text.append(f"  cap {capacity}", style="grey50")
+        if tier == RESIDENCE_MAX_TIER:
+            text.append("  (uncapped)", style="grey50")
+        text.append("\n")
+    text.append("\nescape / c to close\n", style="dim")
+    return text
+
+
+def _render_workshop_config(b) -> Text:  # type: ignore[no-untyped-def]
+    from spqr.sim.models import (
+        WORKSHOP_INPUT_PER_WORKER_PER_TICK,
+        WORKSHOP_OUTPUT_PER_WORKER_PER_TICK,
+    )
+
+    text = Text()
+    text.append("CONFIGURE WORKSHOP\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:  ({b.x}, {b.y})\n", style="grey70")
+    current = Good(b.good)
+    text.append("  Good:      ", style="grey70")
+    text.append(f"{current.name.lower()}\n", style="bright_yellow")
+    input_per_tick = WORKSHOP_INPUT_PER_WORKER_PER_TICK
+    output_per_tick = WORKSHOP_OUTPUT_PER_WORKER_PER_TICK
+    text.append(
+        f"  Rate:      {input_per_tick:.2f} in / {output_per_tick:.2f} out per worker/hr\n\n",
+        style="grey50",
+    )
+    text.append("  Pick a good:\n\n")
+    good_to_key = {Good.FURNITURE: "f", Good.STONEWARE: "s"}
+    good_to_input = {Good.FURNITURE: "timber", Good.STONEWARE: "stone"}
+    for good in Good:
+        is_current = int(good) == int(b.good)
+        hotkey = good_to_key[good]
+        text.append("  ")
+        if is_current:
+            text.append("*", style="bright_green")
+        else:
+            text.append(" ")
+        text.append(" ")
+        text.append(hotkey, style="bright_yellow")
+        text.append(f"  {good.name.lower():<12}")
+        text.append(f"  consumes {good_to_input[good]}", style="grey50")
+        text.append("\n")
+    text.append("\nescape / c to close\n", style="dim")
     return text
 
 
@@ -210,5 +411,5 @@ def _render_no_config(b) -> Text:  # type: ignore[no-untyped-def]
         "  Nothing to configure for this building kind.\n",
         style="grey70",
     )
-    text.append("\n[dim]escape / c to close[/]\n")
+    text.append("\nescape / c to close\n", style="dim")
     return text
