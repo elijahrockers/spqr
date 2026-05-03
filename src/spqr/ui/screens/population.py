@@ -18,7 +18,6 @@ from spqr.engine.world import GameState
 from spqr.sim.models import (
     BuildingKind,
     City,
-    residence_capacity,
     WORKER_SLOTS,
 )
 
@@ -109,7 +108,7 @@ def _render_report(state: GameState) -> Text:
     slots = 0
     assigned = 0
     for b in city.buildings:
-        if b.completion < 1.0:
+        if not b.is_completed:
             continue
         slots += WORKER_SLOTS.get(b.kind, 0)
         assigned += b.workers_assigned
@@ -126,10 +125,10 @@ def _render_report(state: GameState) -> Text:
     civilian = total
     cap = 0
     for b in city.buildings:
-        if b.completion < 1.0:
+        if not b.is_completed:
             continue
         if b.kind in (BuildingKind.RESIDENCE, BuildingKind.DOMUS):
-            cap += residence_capacity(b)
+            cap += b.residence_capacity()
     homeless = max(0.0, civilian - cap)
     _row(text, "Civilians",  f"{civilian:6.0f}", "white")
     _row(text, "Capacity",   f"{cap:6d}",        "white",

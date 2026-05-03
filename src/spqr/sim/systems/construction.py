@@ -18,13 +18,13 @@ from spqr.sim.models import BUILD_HOURS
 def step(state: GameState, rng: random.Random) -> None:
     for city in state.cities:
         for b in city.buildings:
-            if b.completion >= 1.0:
+            if b.is_completed:
                 continue
             if b.workers_assigned <= 0:
                 continue  # stalled — no labor available this tick
             denom = BUILD_HOURS.get(b.kind, 168)
             b.completion = min(1.0, b.completion + b.workers_assigned / denom)
-            if b.completion >= 1.0:
+            if b.is_completed:
                 push_log(
                     state.log,
                     state.tick,

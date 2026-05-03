@@ -6,7 +6,7 @@ from spqr.engine.commands import (
     TogglePause,
     ZoneKind,
 )
-from spqr.engine.tick import Engine, is_buildable
+from spqr.engine.tick import Engine
 from spqr.engine.world import Speed
 from spqr.sim.models import BuildingKind, CityTerrain
 from spqr.sim.systems import default_systems
@@ -178,12 +178,10 @@ def test_construction_uses_builder_slots_and_advances():
 
 
 def test_total_storage_capacity_grows_when_warehouse_completes():
-    from spqr.engine.tick import total_storage_capacity
-
     state = new_game(seed=5, seed_starter=False)
     city = state.player_city()
     # Fresh start: no seeded buildings, so no storage capacity yet.
-    base_cap = total_storage_capacity(city)
+    base_cap = city.total_storage_capacity()
     assert base_cap == 0
     eng = Engine(state, default_systems())
     # Construction needs labor; seed pleb pop directly.
@@ -204,10 +202,10 @@ def test_total_storage_capacity_grows_when_warehouse_completes():
     eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.WAREHOUSE))
     eng.step(1)
     # Still under construction — capacity unchanged.
-    assert total_storage_capacity(city) == base_cap
+    assert city.total_storage_capacity() == base_cap
     eng.step(400)
     # Now completed; capacity should have grown by 250.
-    assert total_storage_capacity(city) == base_cap + 250
+    assert city.total_storage_capacity() == base_cap + 250
 
 
 def test_place_zone_rect_normalizes_corners():
@@ -244,7 +242,7 @@ def test_is_buildable_rejects_water_and_buildings():
         None,
     )
     if water is not None:
-        assert not is_buildable(city, water[0], water[1])
+        assert not city.is_buildable(water[0], water[1])
     # Procgen no longer seeds buildings — designate one to occupy a tile.
     spot = None
     for y in range(city.height):
@@ -259,7 +257,7 @@ def test_is_buildable_rejects_water_and_buildings():
     eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
     eng.step(1)
     occupied = (city.buildings[0].x, city.buildings[0].y)
-    assert not is_buildable(city, occupied[0], occupied[1])
+    assert not city.is_buildable(occupied[0], occupied[1])
 
 
 def test_place_zone_creates_building():

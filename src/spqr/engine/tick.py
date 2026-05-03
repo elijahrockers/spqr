@@ -20,12 +20,8 @@ from spqr.engine.rng import RngState
 from spqr.engine.world import GameState, Speed, restore_rng
 from spqr.sim.models import (
     BUILDING_COST,
-    STORAGE_CAPACITY,
     Building,
     BuildingKind,
-    City,
-    CityTerrain,
-    Resources,
 )
 
 
@@ -47,39 +43,6 @@ _ZONE_TO_BUILDING: dict[ZoneKind, BuildingKind] = {
     ZoneKind.ROAD: BuildingKind.ROAD,
     ZoneKind.WAREHOUSE: BuildingKind.WAREHOUSE,
 }
-
-# Terrain types you can build on. Water and rock are off-limits for any
-# zone; forest and hill require clearing/leveling work that's out of MVP
-# scope. Roads can also lay over plain grass/dirt only.
-_BUILDABLE_TERRAIN: frozenset[CityTerrain] = frozenset(
-    {CityTerrain.GRASS, CityTerrain.DIRT}
-)
-
-
-def is_buildable(city: City, x: int, y: int) -> bool:
-    """A tile is buildable if it's in bounds, empty, and on suitable terrain."""
-    if not city.in_bounds(x, y):
-        return False
-    tile = city.tile(x, y)
-    if tile.building_id != -1:
-        return False
-    return tile.terrain in _BUILDABLE_TERRAIN
-
-
-def total_storage_capacity(city: City) -> int:
-    """Sum of materials storage across all completed storage-bearing
-    buildings. Determines how much timber + stone the city can hold."""
-    cap = 0
-    for b in city.buildings:
-        if b.completion < 1.0:
-            continue
-        cap += STORAGE_CAPACITY.get(b.kind, 0)
-    return cap
-
-
-def stored_materials(city: City) -> float:
-    """Combined timber + stone currently held; checked against storage cap."""
-    return city.treasury.timber + city.treasury.stone
 
 
 class Engine:
@@ -178,7 +141,7 @@ class Engine:
         unaffordable = 0
         for y in range(y_lo, y_hi + 1):
             for x in range(x_lo, x_hi + 1):
-                if not is_buildable(city, x, y):
+                if not city.is_buildable(x, y):
                     continue
                 if not city.treasury.can_pay(cost):
                     unaffordable += 1

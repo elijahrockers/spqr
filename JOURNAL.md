@@ -5,6 +5,117 @@ new entries on top.
 
 ---
 
+## 2026-05-03 — OO pass: methods on City/Building, slimmer engine
+
+Refactor only — no behavior change. Pre- and post-refactor determinism
+hash both `d56cebeb...` from the standard seed-42, 1000-tick run.
+
+### What moved
+
+- **`is_buildable`, `total_storage_capacity`, `stored_materials`** moved
+  from `engine/tick.py` to methods on `City`. The engine layer no
+  longer carries domain queries — `tick.py` shrank from ~234 lines to
+  ~190 by deleting helpers that don't belong to the Engine.
+  `_BUILDABLE_TERRAIN` constant moved alongside `City.is_buildable`
+  in `sim/models/city.py`.
+- **`residence_capacity`, `operational_worker_slots`, `farm_*`** moved
+  from free functions in `building.py` to methods on `Building`. New
+  callers do `b.residence_capacity()` instead of importing the
+  free function. The `__all__` in `sim/models/__init__.py` no longer
+  exports these names.
+- **`Building.is_completed` / `is_under_construction`** properties
+  replace the 21+ scattered `b.completion >= 1.0` checks.
+- **`City.completed_of(kind)`** iterator replaces the 21 ad-hoc
+  `for b in city.buildings if b.kind == X and b.completion >= 1.0`
+  loops across systems and UI.
+- **`is_first_of_month` / `is_first_of_week`** in `engine/world.py`
+  replace inline modulo math in `housing.py`, `economy.py`,
+  `population.py`. Both gate on `tick > 0` so the founding tick
+  doesn't fire monthly events before any time has passed.
+
+### Why this was safe
+
+- `msgspec.Struct` serializes only declared fields. Methods don't
+  affect the wire format, so save files round-trip identically and
+  `SCHEMA_VERSION` doesn't bump.
+- The determinism hash is a strong regression signal for a refactor —
+  if any math drifted by one floating-point operation, it'd shift.
+  Same hash before and after = no behavior change.
+
+### What was *not* changed (deferred to a later pass)
+
+- Splitting `grain.py` (still 475 lines, 4 sub-pipelines) into a
+  `food/` package.
+- Centralizing satisfaction mutations behind a single API (still in
+  4 systems).
+- Per-tick coverage cache (Dijkstra still recomputed each tick).
+- Replacing `Engine._apply`'s `match` statement with a dispatch
+  protocol.
+- Promoting `System` from Callable Protocol to a dataclass with
+  metadata (name, phase, cadence).
+
+These remain as a punch-list in the planning doc.
+
+---
+
+## 2026-05-03 — Configure hotkey, residence info detail, road desirability
+
+Three small UI/sim refinements shipped together. No schema bump — only
+satisfaction math and UI layout changed.
+
+### `c` becomes the configure hotkey
+- Pulled `c` off the city/region toggle and the `cycle_crop` action.
+  New `ConfigScreen` modal opens for the building under the cursor.
+  Today only farms have anything to configure (crop selection); other
+  kinds open with a "nothing to configure" placeholder so the dialog
+  is still discoverable.
+- Crop selection: `1` = wheat, `2` = vegetables. If the standing crop
+  is past `CROP_SWITCH_CONFIRM_THRESHOLD = 0.30` mature, the modal
+  asks for `y/n` confirmation before discarding the in-progress growth
+  — switching a 90%-ripe wheat crop to vegetables is almost always a
+  player misclick.
+- Region toggle moved to `r`-as-toggle (was `c`/`r`-as-twin-bindings).
+  Press `r` once for the region map, `r` again to come back.
+
+### Residence info section in (i)
+- The inspector used to list every granary and warehouse in reach,
+  with per-source stocks. That detail moved to `InfoScreen`'s new
+  residence renderer — the inspector now just shows a one-line
+  food-types summary with a hint to press `i` for the breakdown.
+  Frees up vertical space in the inspector so the housing tier and
+  meal time stay above the fold.
+- Residence info also surfaces the road-desirability buff status
+  ("Road within 2: yes (desirability buff active)") so the player can
+  see why one residence's district is climbing satisfaction faster
+  than another.
+
+### Road-proximity desirability buff
+- New mechanic: each month, a district's satisfaction is bumped by
+  `ROAD_DESIRABILITY_BONUS_PER_MONTH × fraction-of-residences-with-a-
+  road-within-2-tiles`. Half-coverage gives half the bonus, full
+  coverage gives the full +0.02. Distinct from the
+  `RESIDENCE_AMENITY_REACH_COST` Dijkstra check that already gates
+  tier upgrades — that's a cost cap; this is a literal tile distance
+  using Chebyshev (cheap rectangular sweep, no Dijkstra needed).
+- Implemented in `housing._apply_road_desirability` so it shares the
+  monthly-tick gate with tier upgrades. Population reads the bumped
+  satisfaction in the same monthly cycle, so migration responds
+  immediately the next week.
+
+### Test gotcha — pop drift masks small satisfaction bumps
+- First pass at the road-buff test stepped a full month of engine
+  systems, expected to see the +0.02 land cleanly. It didn't —
+  satisfaction went *down* by ~0.6. Cause: an empty-pop district
+  starts pulling settlers via weekly migration, but with no granary
+  in reach the meal pipeline tanks satisfaction by 0.04 per missed
+  pleb meal. Across 30 daily meals that's overwhelming.
+- Fixed by making those tests unit tests of
+  `_apply_road_desirability` directly: set `d.satisfaction = 0.5`,
+  call the helper, assert the bump. The integration with full systems
+  is covered by the existing world-smoke test.
+
+---
+
 ## 2026-05-03 — Residence rename, material tiers, lumber mill + quarry
 
 Three changes shipped together; schema bumped to v6.

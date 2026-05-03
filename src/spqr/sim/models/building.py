@@ -131,16 +131,8 @@ CROP_YIELD_PER_HARVEST: dict[int, float] = {
 }
 
 
-def farm_worker_slots(b: "Building") -> int:
-    return CROP_WORKER_SLOTS.get(int(b.crop), 1)
-
-
-def farm_worker_hours_per_harvest(b: "Building") -> int:
-    return CROP_WORKER_HOURS_PER_HARVEST.get(int(b.crop), 720)
-
-
-def farm_yield_per_harvest(b: "Building") -> float:
-    return CROP_YIELD_PER_HARVEST.get(int(b.crop), 100.0)
+_DEFAULT_CROP_WORKER_HOURS_PER_HARVEST = 720
+_DEFAULT_CROP_YIELD_PER_HARVEST = 100.0
 
 
 # Maximum grain stored on a farm awaiting transport. If full, growth still
@@ -236,6 +228,17 @@ RESIDENCE_TIER_UPGRADE_STONE_COST: dict[int, int] = {
 # which a residence must find a ROAD building to qualify for tier upgrades.
 RESIDENCE_AMENITY_REACH_COST: float = 4.0
 
+# Road desirability buff. A residence with a completed road within
+# Chebyshev distance ROAD_DESIRABILITY_RADIUS contributes a per-month
+# satisfaction bonus to its district. Computed as the fraction of
+# residences with road access × ROAD_DESIRABILITY_BONUS_PER_MONTH, so a
+# fully-roaded district gets the full bonus and a partly-roaded one gets
+# proportionally less. Distinct from RESIDENCE_AMENITY_REACH_COST (which
+# is a Dijkstra cost cap that gates tier upgrades): this is a tile-radius
+# proximity check that nudges happiness everywhere in the district.
+ROAD_DESIRABILITY_RADIUS: int = 2
+ROAD_DESIRABILITY_BONUS_PER_MONTH: float = 0.02
+
 
 # Industry — material production buildings. Lumber mills produce timber,
 # quarries produce stone. Both halt when total city materials
@@ -282,22 +285,53 @@ class Building(msgspec.Struct, frozen=False):
     # ones arrive. Used by the inspector "Info → graph" view.
     inventory_history: list[float] = msgspec.field(default_factory=list)
 
+    # --- state predicates -------------------------------------------------
 
-def residence_capacity(b: Building) -> int:
-    """Tier-aware housing capacity. The single source of truth — every
-    consumer (grain meal demand, migration cap, inspector display) must
-    go through this helper, otherwise tier-aware capacity drifts silently
-    between systems."""
-    if b.kind == BuildingKind.RESIDENCE:
-        return RESIDENCE_TIER_CAPACITY.get(b.tier, 0)
-    return HOUSING_CAPACITY.get(b.kind, 0)
+    @property
+    def is_completed(self) -> bool:
+        """True when the building is operational. The single check —
+        scattered `b.completion >= 1.0` comparisons are the same shape
+        of bug as reimplementing spatial.coverage in a UI helper."""
+        return self.completion >= 1.0
 
+    @property
+    def is_under_construction(self) -> bool:
+        return self.completion < 1.0
 
-def operational_worker_slots(b: Building) -> int:
-    """Worker slots an operational building needs. Farms are crop-driven
-    (wheat: 1, vegetables: 4); other kinds use the WORKER_SLOTS constant.
-    Like residence_capacity, this is the single source of truth — labor and
-    inspector both route through it so a wheat farm correctly draws 1."""
-    if b.kind == BuildingKind.FARM:
-        return farm_worker_slots(b)
-    return WORKER_SLOTS.get(b.kind, 0)
+    # --- housing ----------------------------------------------------------
+
+    def residence_capacity(self) -> int:
+        """Tier-aware housing capacity. The single source of truth —
+        every consumer (grain meal demand, migration cap, inspector
+        display) must go through this method, otherwise tier-aware
+        capacity drifts silently between systems."""
+        if self.kind == BuildingKind.RESIDENCE:
+            return RESIDENCE_TIER_CAPACITY.get(self.tier, 0)
+        return HOUSING_CAPACITY.get(self.kind, 0)
+
+    # --- labor ------------------------------------------------------------
+
+    def operational_worker_slots(self) -> int:
+        """Worker slots an operational building needs. Farms are
+        crop-driven (wheat: 1, vegetables: 4); other kinds use the
+        WORKER_SLOTS constant. Single source of truth — labor and
+        inspector both route through it so a wheat farm correctly
+        draws 1."""
+        if self.kind == BuildingKind.FARM:
+            return self.farm_worker_slots()
+        return WORKER_SLOTS.get(self.kind, 0)
+
+    # --- farming ----------------------------------------------------------
+
+    def farm_worker_slots(self) -> int:
+        return CROP_WORKER_SLOTS.get(int(self.crop), 1)
+
+    def farm_worker_hours_per_harvest(self) -> int:
+        return CROP_WORKER_HOURS_PER_HARVEST.get(
+            int(self.crop), _DEFAULT_CROP_WORKER_HOURS_PER_HARVEST
+        )
+
+    def farm_yield_per_harvest(self) -> float:
+        return CROP_YIELD_PER_HARVEST.get(
+            int(self.crop), _DEFAULT_CROP_YIELD_PER_HARVEST
+        )

@@ -42,9 +42,6 @@ from spqr.sim.models import (
     City,
     Crop,
     PopClass,
-    farm_worker_hours_per_harvest,
-    farm_yield_per_harvest,
-    residence_capacity,
 )
 
 from .spatial import coverage
@@ -79,9 +76,7 @@ def _record_granary_history(city: City) -> None:
     """Append the current grain_stored to each completed granary's
     `inventory_history`, capping at GRANARY_HISTORY_MAX_SAMPLES so save
     files don't grow unbounded."""
-    for b in city.buildings:
-        if b.kind != BuildingKind.GRANARY or b.completion < 1.0:
-            continue
+    for b in city.completed_of(BuildingKind.GRANARY):
         b.inventory_history.append(b.grain_stored)
         excess = len(b.inventory_history) - GRANARY_HISTORY_MAX_SAMPLES
         if excess > 0:
@@ -93,31 +88,25 @@ def _record_granary_history(city: City) -> None:
 
 def _granary_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
     """Per-granary coverage map. Includes only completed granaries."""
-    out: dict[int, dict[tuple[int, int], float]] = {}
-    for b in city.buildings:
-        if b.kind != BuildingKind.GRANARY or b.completion < 1.0:
-            continue
-        out[b.id] = coverage(city, b.x, b.y, GRANARY_REACH_COST)
-    return out
+    return {
+        b.id: coverage(city, b.x, b.y, GRANARY_REACH_COST)
+        for b in city.completed_of(BuildingKind.GRANARY)
+    }
 
 
 def _warehouse_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
     """Per-warehouse coverage map for vegetables feeding. Same Dijkstra
     cost cap as granaries — vegetables travel as far as grain does."""
-    out: dict[int, dict[tuple[int, int], float]] = {}
-    for b in city.buildings:
-        if b.kind != BuildingKind.WAREHOUSE or b.completion < 1.0:
-            continue
-        out[b.id] = coverage(city, b.x, b.y, GRANARY_REACH_COST)
-    return out
+    return {
+        b.id: coverage(city, b.x, b.y, GRANARY_REACH_COST)
+        for b in city.completed_of(BuildingKind.WAREHOUSE)
+    }
 
 
 def _grow_and_harvest(state: GameState, city: City, in_season: bool) -> None:
     if not in_season:
         return
-    for b in city.buildings:
-        if b.kind != BuildingKind.FARM or b.completion < 1.0:
-            continue
+    for b in city.completed_of(BuildingKind.FARM):
         if b.workers_assigned <= 0:
             continue
         # Pick the produce bin based on crop. Both bins share
@@ -132,10 +121,10 @@ def _grow_and_harvest(state: GameState, city: City, in_season: bool) -> None:
             # Storage full; growth pauses until pickup catches up. Keeps a
             # neglected farm from accumulating infinite produce.
             continue
-        b.grain_maturity += b.workers_assigned / farm_worker_hours_per_harvest(b)
+        b.grain_maturity += b.workers_assigned / b.farm_worker_hours_per_harvest()
         if b.grain_maturity >= 1.0:
             b.grain_maturity = 0.0
-            yield_amount = farm_yield_per_harvest(b)
+            yield_amount = b.farm_yield_per_harvest()
             yielded = min(yield_amount, FARM_GRAIN_CAPACITY - stock)
             if b.crop == int(Crop.WHEAT):
                 b.grain_stored += yielded
@@ -157,9 +146,7 @@ def _transport(
     granary_cov: dict[int, dict[tuple[int, int], float]],
     warehouse_cov: dict[int, dict[tuple[int, int], float]],
 ) -> None:
-    for farm in city.buildings:
-        if farm.kind != BuildingKind.FARM or farm.completion < 1.0:
-            continue
+    for farm in city.completed_of(BuildingKind.FARM):
         if farm.crop == int(Crop.WHEAT) and farm.grain_stored > 0:
             target = _nearest_storage_for_farm(
                 city, farm, granary_cov,
@@ -205,9 +192,7 @@ def _nearest_storage_for_farm(
     farm_reach = coverage(city, farm.x, farm.y, FARM_TRANSPORT_REACH_COST)
     best = None
     best_cost = float("inf")
-    for b in city.buildings:
-        if b.kind != kind or b.completion < 1.0:
-            continue
+    for b in city.completed_of(kind):
         if getattr(b, stock_attr) >= capacity:
             continue
         c = farm_reach.get((b.x, b.y))
@@ -248,7 +233,7 @@ def _consume(
                 city.buildings[b_id]
                 for b_id in d.building_ids
                 if city.buildings[b_id].kind == housing_kind
-                and city.buildings[b_id].completion >= 1.0
+                and city.buildings[b_id].is_completed
             ]
             allow_veg = cls == PopClass.PLEB
             unmet, food_types = _serve_meal(
@@ -275,7 +260,7 @@ def _serve_meal(
     if not houses:
         unmet = _drain_any_granary(city, demand)
         return unmet, (1 if unmet < demand else 0)
-    total_cap = sum(residence_capacity(h) for h in houses)
+    total_cap = sum(h.residence_capacity() for h in houses)
     if total_cap == 0:
         unmet = _drain_any_granary(city, demand)
         return unmet, (1 if unmet < demand else 0)
@@ -283,7 +268,7 @@ def _serve_meal(
     grain_drawn = False
     veg_drawn = False
     for h in houses:
-        share = residence_capacity(h) / total_cap
+        share = h.residence_capacity() / total_cap
         house_demand = demand * share
         drained, g_used, v_used = _drain_for_house(
             city, h, granary_cov, warehouse_cov, house_demand,
@@ -414,11 +399,10 @@ def _drain_from(
 
 def _drain_any_granary(city: City, demand: float) -> float:
     """Fallback: pull from any granary, largest first. Returns unmet."""
-    granaries = [
-        b for b in city.buildings
-        if b.kind == BuildingKind.GRANARY and b.completion >= 1.0
-    ]
-    granaries.sort(key=lambda g: (-g.grain_stored, g.id))
+    granaries = sorted(
+        city.completed_of(BuildingKind.GRANARY),
+        key=lambda g: (-g.grain_stored, g.id),
+    )
     remaining = demand
     for g in granaries:
         take = min(remaining, g.grain_stored)
@@ -434,21 +418,17 @@ def _drain_any_granary(city: City, demand: float) -> float:
 def _sync_treasury_grain(city: City) -> None:
     """Recompute treasury.grain as the sum of granary inventories. The
     treasury value is now a cached aggregate; granaries are authoritative."""
-    total = 0.0
-    for b in city.buildings:
-        if b.kind == BuildingKind.GRANARY and b.completion >= 1.0:
-            total += b.grain_stored
-    city.treasury.grain = total
+    city.treasury.grain = sum(
+        b.grain_stored for b in city.completed_of(BuildingKind.GRANARY)
+    )
 
 
 def _sync_treasury_vegetables(city: City) -> None:
     """Recompute treasury.vegetables as the sum of warehouse veg
     inventories. Warehouses are authoritative; treasury is a cache."""
-    total = 0.0
-    for b in city.buildings:
-        if b.kind == BuildingKind.WAREHOUSE and b.completion >= 1.0:
-            total += b.vegetables_stored
-    city.treasury.vegetables = total
+    city.treasury.vegetables = sum(
+        b.vegetables_stored for b in city.completed_of(BuildingKind.WAREHOUSE)
+    )
 
 
 def drain_treasury_grain(city: City, amount: float) -> float:
@@ -456,11 +436,10 @@ def drain_treasury_grain(city: City, amount: float) -> float:
     largest-first). Returns the amount actually drained. Used by the
     economy system for the monthly grain dole."""
     drained = 0.0
-    granaries = [
-        b for b in city.buildings
-        if b.kind == BuildingKind.GRANARY and b.completion >= 1.0
-    ]
-    granaries.sort(key=lambda g: (-g.grain_stored, g.id))
+    granaries = sorted(
+        city.completed_of(BuildingKind.GRANARY),
+        key=lambda g: (-g.grain_stored, g.id),
+    )
     remaining = amount
     for g in granaries:
         take = min(remaining, g.grain_stored)

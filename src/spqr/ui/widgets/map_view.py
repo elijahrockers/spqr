@@ -21,7 +21,6 @@ from spqr.sim.models import (
     Province,
     RegionBiome,
     SiteKind,
-    residence_capacity,
 )
 
 
@@ -123,10 +122,6 @@ def _render_city(
     """Render the city tilemap. Pass `flash_show_building` explicitly in
     tests; in production it's derived from the wall clock so construction
     sites animate even while the sim is paused."""
-    # Importing locally to avoid a top-level cycle (engine -> models, ui ->
-    # engine via the app entry point).
-    from spqr.engine.tick import is_buildable
-
     if flash_show_building is None:
         flash_show_building = (
             int(time.monotonic() / _FLASH_PHASE_SECONDS) % 2
@@ -149,7 +144,7 @@ def _render_city(
             glyph, color = terrain_glyph, terrain_color
             if tile.building_id != -1:
                 b = city.buildings[tile.building_id]
-                if b.completion < 1.0:
+                if b.is_under_construction:
                     # Alternate: half the time show the building glyph (dim),
                     # the other half let the underlying terrain show.
                     if flash_show_building:
@@ -171,7 +166,7 @@ def _render_city(
             )
             if in_rect:
                 # Green = will place here; red = will be skipped.
-                bg = "dark_green" if is_buildable(city, x, y) else "dark_red"
+                bg = "dark_green" if city.is_buildable(x, y) else "dark_red"
                 style = Style(color=color, bgcolor=bg)
             if x == cur_x and y == cur_y:
                 style = Style(color="black", bgcolor="white", bold=True)
@@ -195,13 +190,13 @@ def _full_residence_ids(city: City) -> frozenset[int]:
         domus_ids: list[int] = []
         for b_id in d.building_ids:
             b = city.buildings[b_id]
-            if b.completion < 1.0:
+            if b.is_under_construction:
                 continue
             if b.kind == BuildingKind.RESIDENCE:
-                pleb_cap += residence_capacity(b)
+                pleb_cap += b.residence_capacity()
                 residence_ids.append(b_id)
             elif b.kind == BuildingKind.DOMUS:
-                domus_cap += residence_capacity(b)
+                domus_cap += b.residence_capacity()
                 domus_ids.append(b_id)
         if pleb_cap > 0 and d.pops.plebs >= pleb_cap - 0.5:
             full.update(residence_ids)

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from spqr.bootstrap import new_game
 from spqr.engine.commands import PlaceZone, ZoneKind
-from spqr.engine.tick import Engine, total_storage_capacity
+from spqr.engine.tick import Engine
 from spqr.sim.models import (
     BUILDING_COST,
     LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK,
@@ -107,7 +107,7 @@ def test_industry_halts_when_at_storage_cap():
     mill = next(b for b in city.buildings if b.kind == BuildingKind.LUMBER_MILL)
     mill.completion = 1.0
     city.districts[0].pops.plebs = 50.0
-    cap = total_storage_capacity(city)
+    cap = city.total_storage_capacity()
     assert cap == 0
     assert city.treasury.timber + city.treasury.stone >= cap
     timber_before = city.treasury.timber

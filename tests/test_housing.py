@@ -16,7 +16,6 @@ from spqr.sim.models import (
     BuildingKind,
     CityTerrain,
     Crop,
-    farm_worker_slots,
 )
 from spqr.sim.systems import default_systems
 
@@ -184,7 +183,7 @@ def test_new_farm_defaults_to_wheat_with_one_worker_slot():
     eng.step(1)
     farm = next(b for b in city.buildings if b.kind == BuildingKind.FARM)
     assert farm.crop == int(Crop.WHEAT)
-    assert farm_worker_slots(farm) == 1
+    assert farm.farm_worker_slots() == 1
 
 
 def test_set_farm_crop_switches_and_resets_maturity():
@@ -201,7 +200,7 @@ def test_set_farm_crop_switches_and_resets_maturity():
     eng.step(1)
     assert farm.crop == int(Crop.VEGETABLES)
     assert farm.grain_maturity == 0.0
-    assert farm_worker_slots(farm) == 4
+    assert farm.farm_worker_slots() == 4
 
 
 def test_vegetables_farm_does_not_produce_grain():
@@ -219,3 +218,77 @@ def test_vegetables_farm_does_not_produce_grain():
     farm.grain_maturity = 0.0
     eng.step(HOURS_PER_MONTH)
     assert farm.grain_maturity == 0.0
+
+
+def test_road_within_2_tiles_buffs_district_satisfaction():
+    """A residence with a road within Chebyshev distance 2 contributes
+    a per-month satisfaction bump. With a single residence and a single
+    road tile, the fraction-with-road is 1.0, so the full
+    ROAD_DESIRABILITY_BONUS_PER_MONTH lands.
+
+    Calls the housing helper directly so meal/migration noise can't
+    drown out the bonus — this is a unit test of the helper's math."""
+    from spqr.sim.models import ROAD_DESIRABILITY_BONUS_PER_MONTH
+    from spqr.sim.systems.housing import _apply_road_desirability
+
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    res, _road = _designate_with_adjacent_road(eng, city)
+    d = city.districts[0]
+    d.satisfaction = 0.5
+    _apply_road_desirability(city)
+    delta = d.satisfaction - 0.5
+    assert abs(delta - ROAD_DESIRABILITY_BONUS_PER_MONTH) < 1e-6
+
+
+def test_no_road_means_no_desirability_buff():
+    """Residence without a road in 2 tiles: zero contribution to the
+    road desirability bonus."""
+    from spqr.sim.systems.housing import _apply_road_desirability
+
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    spot = find_clear_grass(city)
+    eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    d = city.districts[0]
+    d.satisfaction = 0.5
+    _apply_road_desirability(city)
+    assert d.satisfaction == 0.5
+
+
+def test_road_buff_scales_with_fraction_of_residences_in_reach():
+    """One residence near a road, one far away. Fraction = 0.5, so the
+    monthly bump should be half of the full bonus."""
+    from spqr.sim.models import ROAD_DESIRABILITY_BONUS_PER_MONTH
+    from spqr.sim.systems.housing import _apply_road_desirability
+
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    res_a, _road = _designate_with_adjacent_road(eng, city)
+    used = {(res_a.x, res_a.y), (res_a.x + 1, res_a.y)}
+    far_xy = None
+    for y in range(city.height):
+        for x in range(city.width):
+            if (x, y) in used:
+                continue
+            if abs(x - res_a.x) < 5 or abs(y - res_a.y) < 5:
+                continue
+            t = city.tile(x, y)
+            if t.building_id == -1 and t.terrain == CityTerrain.GRASS:
+                far_xy = (x, y)
+                break
+        if far_xy:
+            break
+    assert far_xy is not None
+    eng.submit(PlaceZone(x=far_xy[0], y=far_xy[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    d = city.districts[0]
+    d.satisfaction = 0.5
+    _apply_road_desirability(city)
+    delta = d.satisfaction - 0.5
+    expected = ROAD_DESIRABILITY_BONUS_PER_MONTH * 0.5
+    assert abs(delta - expected) < 1e-6

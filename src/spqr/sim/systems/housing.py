@@ -1,27 +1,34 @@
-"""Housing — monthly tier upgrades for residences.
+"""Housing — monthly tier upgrades for residences plus road-proximity
+desirability bonus.
 
-A residence is designated at tier 0 (undeveloped land — squatter
-family). Each month, every completed residence with a road within
-RESIDENCE_AMENITY_REACH_COST tiles (Dijkstra over the same cost model
-the grain pipeline uses) and sufficient timber AND stone in the
-treasury advances one tier. Stops at RESIDENCE_MAX_TIER.
+Tier upgrades: a residence is designated at tier 0 (undeveloped land —
+squatter family). Each month, every completed residence with a road
+within RESIDENCE_AMENITY_REACH_COST tiles (Dijkstra over the same cost
+model the grain pipeline uses) and sufficient timber AND stone in the
+treasury advances one tier. Stops at RESIDENCE_MAX_TIER. Tier 1 (huts)
+needs only timber; tiers 2 (cottages) and 3 (insula) need both timber
+and stone, reflecting heavier masonry.
 
-Tier 1 (huts) needs only timber; tiers 2 (cottages) and 3 (insula) need
-both timber and stone, reflecting heavier masonry. Roads are the only
-amenity in MVP; future tiers will demand water, civic buildings, etc."""
+Road desirability: independent from tier gating. Each month a district's
+satisfaction is bumped by ROAD_DESIRABILITY_BONUS_PER_MONTH × fraction-
+of-residences-with-a-road-within-2-tiles (Chebyshev). This is a
+proximity check, not a Dijkstra cost cap — a road squeezed against a
+house's wall counts the same as one a tile away."""
 
 from __future__ import annotations
 
 import random
 
 from spqr.engine.events import LogSeverity, push_log
-from spqr.engine.world import HOURS_PER_MONTH, GameState
+from spqr.engine.world import GameState, is_first_of_month
 from spqr.sim.models import (
     RESIDENCE_AMENITY_REACH_COST,
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
     RESIDENCE_TIER_UPGRADE_STONE_COST,
     RESIDENCE_TIER_UPGRADE_TIMBER_COST,
+    ROAD_DESIRABILITY_BONUS_PER_MONTH,
+    ROAD_DESIRABILITY_RADIUS,
     BuildingKind,
     City,
     Resources,
@@ -31,17 +38,16 @@ from .spatial import coverage
 
 
 def step(state: GameState, rng: random.Random) -> None:
-    if (state.tick % HOURS_PER_MONTH) != 0 or state.tick == 0:
+    if not is_first_of_month(state.tick):
         return
     for city in state.cities:
         _upgrade_residences(state, city)
+        _apply_road_desirability(city)
 
 
 def _upgrade_residences(state: GameState, city: City) -> None:
     # Stable order: ascending building id.
-    for b in sorted(city.buildings, key=lambda b: b.id):
-        if b.kind != BuildingKind.RESIDENCE or b.completion < 1.0:
-            continue
+    for b in sorted(city.completed_of(BuildingKind.RESIDENCE), key=lambda b: b.id):
         if b.tier >= RESIDENCE_MAX_TIER:
             continue
         next_tier = b.tier + 1
@@ -69,6 +75,52 @@ def _has_road_in_reach(city: City, x: int, y: int) -> bool:
         if tile.building_id == -1:
             continue
         b = city.buildings[tile.building_id]
-        if b.kind == BuildingKind.ROAD and b.completion >= 1.0:
+        if b.kind == BuildingKind.ROAD and b.is_completed:
             return True
+    return False
+
+
+def _apply_road_desirability(city: City) -> None:
+    """Per district: bump satisfaction by the road-desirability bonus
+    scaled by what fraction of completed residences have a road within
+    ROAD_DESIRABILITY_RADIUS tiles (Chebyshev). Districts with no
+    residences get nothing. The fraction smooths over partial coverage:
+    a district where half the houses have a road nearby gets half the
+    bonus, not all-or-nothing."""
+    for d in city.districts:
+        residences = [
+            city.buildings[b_id]
+            for b_id in d.building_ids
+            if city.buildings[b_id].kind == BuildingKind.RESIDENCE
+            and city.buildings[b_id].is_completed
+        ]
+        if not residences:
+            continue
+        with_road = sum(
+            1 for b in residences
+            if _road_within_chebyshev(city, b.x, b.y, ROAD_DESIRABILITY_RADIUS)
+        )
+        fraction = with_road / len(residences)
+        if fraction <= 0:
+            continue
+        d.satisfaction = min(
+            1.0, d.satisfaction + ROAD_DESIRABILITY_BONUS_PER_MONTH * fraction
+        )
+
+
+def _road_within_chebyshev(city: City, x: int, y: int, radius: int) -> bool:
+    """True if any completed ROAD building lies within Chebyshev distance
+    `radius` of (x, y). Cheap rectangular sweep; no Dijkstra needed since
+    'within 2 tiles' is a literal tile-distance concept."""
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = x + dx, y + dy
+            if not city.in_bounds(nx, ny):
+                continue
+            tile = city.tiles[ny * city.width + nx]
+            if tile.building_id == -1:
+                continue
+            b = city.buildings[tile.building_id]
+            if b.kind == BuildingKind.ROAD and b.is_completed:
+                return True
     return False

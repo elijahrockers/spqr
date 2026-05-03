@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 
 from spqr.engine.events import LogSeverity, push_log
-from spqr.engine.world import HOURS_PER_MONTH, GameState
+from spqr.engine.world import GameState, is_first_of_month
 
 from .grain import drain_treasury_grain
 
@@ -21,8 +21,7 @@ TAX_PER_PLEB_AT_FULL_RATE = 5.0
 
 
 def step(state: GameState, rng: random.Random) -> None:
-    monthly_tick = (state.tick % HOURS_PER_MONTH) == 0
-    if not monthly_tick or state.tick == 0:
+    if not is_first_of_month(state.tick):
         return
     for city in state.cities:
         _apply_monthly(state, city)

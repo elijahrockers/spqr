@@ -1,8 +1,11 @@
 """Advanced (i)nfo modal — extended detail for the building under the
 cursor. For granaries, exposes (r)ange highlight and (g)raph hotkeys.
+For residences, lists each granary and warehouse in reach with stocks
+and the road-desirability status — the kind of detail the inspector
+panel intentionally elides.
 
-Other building kinds show plain extended info; future milestones can add
-kind-specific actions in the same dispatch shape."""
+Crop selection used to live here; it's now on the (c)onfigure screen
+so a player can change crops without opening Info."""
 
 from __future__ import annotations
 
@@ -22,8 +25,10 @@ from spqr.sim.models import (
     Crop,
     GRANARY_CAPACITY,
     GRANARY_REACH_COST,
-    farm_worker_slots,
-    farm_yield_per_harvest,
+    RESIDENCE_MAX_TIER,
+    RESIDENCE_TIER_NAME,
+    ROAD_DESIRABILITY_RADIUS,
+    WAREHOUSE_VEGETABLES_CAPACITY,
 )
 
 
@@ -35,11 +40,9 @@ class InfoResult:
       "close"     — modal dismissed; no further action
       "highlight" — App should show this granary's coverage on the city map
       "graph"     — App should open the inventory-history graph screen
-      "cycle_crop"— App should cycle the focused farm's crop
     """
     kind: str
     granary_id: int | None = None
-    farm_id: int | None = None
 
 
 # --- Info screen ------------------------------------------------------------
@@ -62,6 +65,8 @@ class _InfoBody(Widget):
             return _render_granary_info(self.state, city, b)
         if b.kind == BuildingKind.FARM:
             return _render_farm_info(b)
+        if b.kind in (BuildingKind.RESIDENCE, BuildingKind.DOMUS):
+            return _render_residence_info(city, b)
         return _render_generic_info(b)
 
 
@@ -85,7 +90,6 @@ class InfoScreen(ModalScreen[InfoResult]):
         Binding("q", "close", "Close"),
         Binding("r", "highlight", "Highlight range", show=False),
         Binding("g", "graph", "Graph", show=False),
-        Binding("c", "cycle_crop", "Cycle crop", show=False),
     ]
 
     def __init__(self, state: GameState, building_id: int) -> None:
@@ -105,10 +109,6 @@ class InfoScreen(ModalScreen[InfoResult]):
         b = self.state.player_city().buildings[self.building_id]
         return b.kind == BuildingKind.GRANARY
 
-    def _is_farm(self) -> bool:
-        b = self.state.player_city().buildings[self.building_id]
-        return b.kind == BuildingKind.FARM
-
     def action_close(self) -> None:
         self.dismiss(InfoResult(kind="close"))
 
@@ -121,11 +121,6 @@ class InfoScreen(ModalScreen[InfoResult]):
         if not self._is_granary():
             return
         self.dismiss(InfoResult(kind="graph", granary_id=self.building_id))
-
-    def action_cycle_crop(self) -> None:
-        if not self._is_farm():
-            return
-        self.dismiss(InfoResult(kind="cycle_crop", farm_id=self.building_id))
 
 
 def _render_generic_info(b) -> Text:  # type: ignore[no-untyped-def]
@@ -159,7 +154,7 @@ def _render_granary_info(state: GameState, city: City, b) -> Text:  # type: igno
     cov = coverage(city, b.x, b.y, GRANARY_REACH_COST)
     served = [
         ob for ob in city.buildings
-        if ob.completion >= 1.0
+        if ob.is_completed
         and (ob.x, ob.y) in cov
         and ob.id != b.id
     ]
@@ -196,16 +191,123 @@ def _render_farm_info(b) -> Text:  # type: ignore[no-untyped-def]
     crop_name = Crop(b.crop).name.lower()
     text.append("  Crop:        ", style="grey70")
     text.append(f"{crop_name}\n", style="bright_yellow")
-    text.append(f"  Workers:     {b.workers_assigned}/{farm_worker_slots(b)}\n", style="grey70")
+    text.append(f"  Workers:     {b.workers_assigned}/{b.farm_worker_slots()}\n", style="grey70")
     text.append("  Yield:       ", style="grey70")
     text.append(
-        f"{int(farm_yield_per_harvest(b))} per harvest\n", style="white"
+        f"{int(b.farm_yield_per_harvest())} per harvest\n", style="white"
     )
-    text.append(f"  In transit:  {b.grain_stored:.0f}\n", style="grey70")
-    text.append("\n")
-    text.append("  [bright_yellow]C[/]  Cycle crop (wheat ↔ vegetables)\n\n")
-    text.append("[dim]escape / i to close[/]\n")
+    in_transit = (
+        b.grain_stored if b.crop == int(Crop.WHEAT) else b.vegetables_stored
+    )
+    text.append(f"  In transit:  {in_transit:.0f}\n", style="grey70")
+    text.append("\n[dim]press c to change crop  ·  escape / i to close[/]\n")
     return text
+
+
+def _render_residence_info(city: City, b) -> Text:  # type: ignore[no-untyped-def]
+    """Detailed residence info — what the inspector used to show plus
+    per-source food stocks. Lists every granary and warehouse in reach
+    so the player can see exactly which buildings feed this house, the
+    food types accessible, and whether the road-desirability buff is
+    active for this tile."""
+    from spqr.sim.systems.spatial import coverage
+
+    text = Text()
+    label = "RESIDENCE INFO" if b.kind == BuildingKind.RESIDENCE else "DOMUS INFO"
+    text.append(f"{label}\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:    ({b.x}, {b.y})\n", style="grey70")
+    cap = b.residence_capacity()
+    if b.kind == BuildingKind.RESIDENCE:
+        tier_name = RESIDENCE_TIER_NAME.get(b.tier, "?")
+        text.append(
+            f"  Tier:        {tier_name} ({b.tier}/{RESIDENCE_MAX_TIER})\n",
+            style="grey70",
+        )
+    text.append(f"  Capacity:    {cap}\n\n", style="grey70")
+
+    granaries = []
+    warehouses = []
+    for s in city.completed_of(BuildingKind.GRANARY):
+        cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
+        if (b.x, b.y) in cov:
+            granaries.append((s, cov[(b.x, b.y)]))
+    for s in city.completed_of(BuildingKind.WAREHOUSE):
+        cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
+        if (b.x, b.y) in cov:
+            warehouses.append((s, cov[(b.x, b.y)]))
+
+    text.append("Granaries in reach:\n", style="bold grey70")
+    if granaries:
+        for g, cost in sorted(granaries, key=lambda t: t[1]):
+            pct = g.grain_stored / max(GRANARY_CAPACITY, 1.0)
+            color = "green" if pct >= 0.5 else "yellow" if pct >= 0.2 else "red"
+            text.append(
+                f"  ({g.x},{g.y})  ", style="grey50"
+            )
+            text.append(
+                f"{g.grain_stored:>5.0f}/{int(GRANARY_CAPACITY)} grain",
+                style=color,
+            )
+            text.append(f"  cost {cost:.1f}\n", style="grey50")
+    else:
+        text.append("  none in reach — no grain meals here\n", style="red")
+
+    text.append("\nWarehouses in reach:\n", style="bold grey70")
+    if warehouses:
+        for w, cost in sorted(warehouses, key=lambda t: t[1]):
+            pct = w.vegetables_stored / max(WAREHOUSE_VEGETABLES_CAPACITY, 1.0)
+            color = "green" if pct >= 0.5 else "yellow" if pct >= 0.2 else "red"
+            text.append(
+                f"  ({w.x},{w.y})  ", style="grey50"
+            )
+            text.append(
+                f"{w.vegetables_stored:>5.0f}/{int(WAREHOUSE_VEGETABLES_CAPACITY)} veg",
+                style=color,
+            )
+            text.append(f"  cost {cost:.1f}\n", style="grey50")
+    else:
+        text.append("  none in reach — no vegetables here\n", style="grey50")
+
+    in_grain = sum(g.grain_stored for g, _ in granaries) > 0
+    in_veg = sum(w.vegetables_stored for w, _ in warehouses) > 0
+    food_types = int(in_grain) + int(in_veg)
+    text.append("\nFood types:    ", style="grey70")
+    color = "bright_green" if food_types >= 2 else "yellow" if food_types == 1 else "red"
+    text.append(f"{food_types}", style=color)
+    if food_types >= 2:
+        text.append("  (variety bonus active — 2× satisfaction tick)", style="grey50")
+    elif food_types == 0:
+        text.append("  (residents starve)", style="grey50")
+    text.append("\n")
+
+    text.append("Road within ", style="grey70")
+    text.append(f"{ROAD_DESIRABILITY_RADIUS}: ", style="grey70")
+    if _has_road_in_chebyshev(city, b.x, b.y, ROAD_DESIRABILITY_RADIUS):
+        text.append("yes", style="green")
+        text.append("  (desirability buff active)", style="grey50")
+    else:
+        text.append("no", style="red")
+        text.append("  (no road buff)", style="grey50")
+    text.append("\n\n[dim]escape / i to close[/]\n")
+    return text
+
+
+def _has_road_in_chebyshev(city: City, x: int, y: int, radius: int) -> bool:
+    """True if any completed ROAD building lies within Chebyshev distance
+    `radius` of (x, y). Mirrors the housing system's amenity check."""
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = x + dx, y + dy
+            if not city.in_bounds(nx, ny):
+                continue
+            tile = city.tiles[ny * city.width + nx]
+            if tile.building_id == -1:
+                continue
+            ob = city.buildings[tile.building_id]
+            if ob.kind == BuildingKind.ROAD and ob.is_completed:
+                return True
+    return False
 
 
 # --- Graph screen -----------------------------------------------------------

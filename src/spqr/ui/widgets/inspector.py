@@ -25,10 +25,7 @@ from spqr.sim.models import (
     BuildingKind,
     City,
     Crop,
-    farm_yield_per_harvest,
-    residence_capacity,
     hours_until_next_meal,
-    operational_worker_slots,
 )
 
 
@@ -68,15 +65,13 @@ class Inspector(Widget):
 
 
 def _render_terrain(city: City, x: int, y: int) -> Text:
-    from spqr.engine.tick import is_buildable
-
     tile = city.tile(x, y)
     text = Text()
     text.append(f"({x},{y})  ", style="grey50")
     text.append(tile.terrain.name.title(), style="bold green")
     text.append("\n\n")
     text.append("Empty tile.\n", style="grey70")
-    if is_buildable(city, x, y):
+    if city.is_buildable(x, y):
         text.append("Buildable", style="green")
     else:
         text.append("Not buildable", style="red")
@@ -85,18 +80,16 @@ def _render_terrain(city: City, x: int, y: int) -> Text:
 
 
 def _render_building(city: City, x: int, y: int, current_month: int, current_tick: int) -> Text:
-    from spqr.engine.tick import stored_materials, total_storage_capacity
-
     tile = city.tile(x, y)
     b = city.buildings[tile.building_id]
     text = Text()
     text.append(f"({x},{y})  ", style="grey50")
     text.append(b.kind.name.title(), style="bold bright_white")
-    if b.completion < 1.0:
+    if b.is_under_construction:
         text.append("  [under construction]", style="yellow")
     text.append("\n\n")
 
-    if b.completion < 1.0:
+    if b.is_under_construction:
         # Mid-construction view: builders + progress.
         pct = int(b.completion * 100)
         builder_slots = BUILDER_SLOTS.get(b.kind, 1)
@@ -110,31 +103,31 @@ def _render_building(city: City, x: int, y: int, current_month: int, current_tic
         text.append("\n")
     else:
         # Operational view.
-        slots = operational_worker_slots(b)
+        slots = b.operational_worker_slots()
         if slots > 0:
             text.append("Workers:    ", style="grey70")
             text.append(f"{b.workers_assigned}/{slots}\n", style="cyan")
-        cap = residence_capacity(b)
+        cap = b.residence_capacity()
         if cap > 0 or b.kind == BuildingKind.RESIDENCE:
             occupancy = _residence_occupancy(city, b)
-            full = cap > 0 and occupancy >= cap - 0.5
+            full = cap > 0 and occupancy >= cap
             color = "bright_green" if full else "cyan"
             text.append("Housing:    ", style="grey70")
             if b.kind == BuildingKind.RESIDENCE:
                 tier_name = RESIDENCE_TIER_NAME.get(b.tier, "?")
-                text.append(f"{occupancy:.0f}/{cap} plebs", style=color)
+                text.append(f"{occupancy}/{cap} plebs", style=color)
                 text.append(
                     f"  ({tier_name}, tier {b.tier}/{RESIDENCE_MAX_TIER})\n",
                     style="grey50",
                 )
             else:
-                text.append(f"{occupancy:.0f}/{cap} patricians\n", style=color)
+                text.append(f"{occupancy}/{cap} patricians\n", style=color)
         storage = STORAGE_CAPACITY.get(b.kind, 0)
         if storage > 0:
             text.append("Storage:    ", style="grey70")
             text.append(f"{storage} units\n", style="bright_cyan")
-            stored = stored_materials(city)
-            total_cap = total_storage_capacity(city)
+            stored = city.stored_materials()
+            total_cap = city.total_storage_capacity()
             text.append("City stocks:\n", style="grey70")
             text.append(f"  timber {city.treasury.timber:.0f}", style="white")
             text.append(f"  stone {city.treasury.stone:.0f}", style="white")
@@ -182,7 +175,7 @@ def _render_farm_grain(text: Text, b, month: int) -> None:  # type: ignore[no-un
         text.append("(in transit)\n", style="grey50")
     text.append("Yield:      ", style="grey70")
     text.append(
-        f"~{int(farm_yield_per_harvest(b))} per harvest\n", style="grey70"
+        f"~{int(b.farm_yield_per_harvest())} per harvest\n", style="grey70"
     )
 
 
@@ -196,8 +189,6 @@ def _render_granary_grain(text: Text, b) -> None:  # type: ignore[no-untyped-def
 
 
 def _render_industry(text: Text, city: City, b) -> None:  # type: ignore[no-untyped-def]
-    from spqr.engine.tick import stored_materials, total_storage_capacity
-
     is_mill = b.kind == BuildingKind.LUMBER_MILL
     rate = (
         LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK if is_mill
@@ -208,8 +199,8 @@ def _render_industry(text: Text, city: City, b) -> None:  # type: ignore[no-unty
     text.append("Output:     ", style="grey70")
     text.append(f"{per_tick:.2f} {output}/hr", style="bright_yellow")
     text.append(f"  ({rate:.2f}×{b.workers_assigned})\n", style="grey50")
-    stored = stored_materials(city)
-    cap = total_storage_capacity(city)
+    stored = city.stored_materials()
+    cap = city.total_storage_capacity()
     text.append("Storage:    ", style="grey70")
     over_cap = stored >= cap
     color = "red" if over_cap else "white"
@@ -230,42 +221,23 @@ def _render_warehouse_veg(text: Text, b) -> None:  # type: ignore[no-untyped-def
 
 
 def _render_residence_meals(text: Text, city: City, b, current_tick: int) -> None:  # type: ignore[no-untyped-def]
-    # Compute storage buildings whose coverage includes this house's tile.
+    """Lean residence summary. Per-source granary/warehouse stocks
+    moved to the (i)nfo panel; here we just show the high-level food
+    access count and the next meal time."""
     from spqr.sim.systems.spatial import coverage
     from spqr.sim.models import GRANARY_REACH_COST
 
-    in_range_granaries = 0
-    in_range_grain = 0.0
-    in_range_warehouses = 0
-    in_range_veg = 0.0
-    for s in city.buildings:
-        if s.completion < 1.0:
-            continue
-        if s.kind == BuildingKind.GRANARY:
-            cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
-            if (b.x, b.y) in cov:
-                in_range_granaries += 1
-                in_range_grain += s.grain_stored
-        elif s.kind == BuildingKind.WAREHOUSE:
-            cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
-            if (b.x, b.y) in cov:
-                in_range_warehouses += 1
-                in_range_veg += s.vegetables_stored
-    text.append("Granaries:  ", style="grey70")
-    if in_range_granaries > 0:
-        text.append(f"{in_range_granaries} in range", style="green")
-        text.append(f" ({in_range_grain:.0f} grain)\n", style="grey50")
-    else:
-        text.append("none in range", style="red")
-        text.append("\n")
-    text.append("Warehouses: ", style="grey70")
-    if in_range_warehouses > 0:
-        text.append(f"{in_range_warehouses} in range", style="green")
-        text.append(f" ({in_range_veg:.0f} veg)\n", style="grey50")
-    else:
-        text.append("none in range", style="grey50")
-        text.append("\n")
-    food_types = (1 if in_range_grain > 0 else 0) + (1 if in_range_veg > 0 else 0)
+    grain_in_reach = 0.0
+    veg_in_reach = 0.0
+    for s in city.completed_of(BuildingKind.GRANARY):
+        cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
+        if (b.x, b.y) in cov:
+            grain_in_reach += s.grain_stored
+    for s in city.completed_of(BuildingKind.WAREHOUSE):
+        cov = coverage(city, s.x, s.y, GRANARY_REACH_COST)
+        if (b.x, b.y) in cov:
+            veg_in_reach += s.vegetables_stored
+    food_types = (1 if grain_in_reach > 0 else 0) + (1 if veg_in_reach > 0 else 0)
     text.append("Food types: ", style="grey70")
     color = "bright_green" if food_types >= 2 else "yellow" if food_types == 1 else "red"
     text.append(f"{food_types}", style=color)
@@ -301,34 +273,68 @@ def _district_for_building(city: City, b_id: int) -> str | None:
     return None
 
 
-def _residence_occupancy(city: City, b) -> float:  # type: ignore[no-untyped-def]
-    """Proportional share of district pops housed in this building.
-    Pop is tracked at the district level, so per-residence occupancy
-    is computed as `district_pops × (this.cap / sum_of_caps)`."""
-    cap = residence_capacity(b)
+def _residence_occupancy(city: City, b) -> int:  # type: ignore[no-untyped-def]
+    """Integer share of district pops housed in this building.
+
+    Pops are tracked at the district level, so per-residence occupancy
+    is a derived display. We allocate the rounded district pop using
+    Hamilton's largest-remainder method weighted by capacity, so the
+    per-residence integers sum to exactly the same number the status
+    bar shows for the district. Without this, three residences each
+    formatted as `f"{pops*cap/total_cap:.0f}"` independently round
+    upward and the inspector reports more pops than the city has."""
+    cap = b.residence_capacity()
     if cap <= 0:
-        return 0.0
+        return 0
     if b.kind == BuildingKind.RESIDENCE:
         match_kind = BuildingKind.RESIDENCE
     elif b.kind == BuildingKind.DOMUS:
         match_kind = BuildingKind.DOMUS
     else:
-        return 0.0
+        return 0
     for d in city.districts:
         if b.id not in d.building_ids:
             continue
-        total_cap = sum(
-            residence_capacity(city.buildings[b_id])
-            for b_id in d.building_ids
-            if city.buildings[b_id].kind == match_kind
-            and city.buildings[b_id].completion >= 1.0
+        residences = sorted(
+            (
+                city.buildings[b_id]
+                for b_id in d.building_ids
+                if city.buildings[b_id].kind == match_kind
+                and city.buildings[b_id].is_completed
+            ),
+            key=lambda r: r.id,
         )
+        if not residences:
+            return 0
+        total_cap = sum(r.residence_capacity() for r in residences)
         if total_cap <= 0:
-            return 0.0
+            return 0
         pops = (
             d.pops.plebs if match_kind == BuildingKind.RESIDENCE
             else d.pops.patricians
         )
-        share = pops * (cap / total_cap)
-        return min(cap, share)
-    return 0.0
+        # Match the status bar's `:5.0f` rounding so totals tie out.
+        total_int = round(pops)
+        # Floor allocation by proportional share, then hand out the
+        # leftover one-by-one to residences with the largest fractional
+        # remainders (Hamilton's method). Stable id ordering for ties.
+        floors: list[int] = []
+        fracs: list[float] = []
+        for r in residences:
+            exact = total_int * r.residence_capacity() / total_cap
+            f = int(exact)
+            floors.append(f)
+            fracs.append(exact - f)
+        leftover = total_int - sum(floors)
+        # Indices ranked by fractional descending, then id ascending.
+        order = sorted(
+            range(len(residences)),
+            key=lambda i: (-fracs[i], residences[i].id),
+        )
+        for idx in order[:max(0, leftover)]:
+            floors[idx] += 1
+        for r, occupancy in zip(residences, floors):
+            if r.id == b.id:
+                return min(cap, occupancy)
+        return 0
+    return 0

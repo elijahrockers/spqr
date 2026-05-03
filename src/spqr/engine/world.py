@@ -89,3 +89,18 @@ def restore_rng(state: GameState) -> random.Random:
     if state.rng_state.state:
         return state.rng_state.restore()
     return make_rng(state.seed)
+
+
+def is_first_of_month(tick: int) -> bool:
+    """True on the first hour of every game month, *except* tick 0.
+    Systems use this to gate monthly work (housing tier upgrades, the
+    economy dole, monthly birth/death rolls). Skipping tick 0 matches
+    pre-existing behavior — the founding tick shouldn't fire monthly
+    events before the first month has elapsed."""
+    return tick > 0 and tick % HOURS_PER_MONTH == 0
+
+
+def is_first_of_week(tick: int) -> bool:
+    """True on the first hour of every game week, except tick 0.
+    Used by population.step to fire migration waves."""
+    return tick > 0 and tick % HOURS_PER_WEEK == 0

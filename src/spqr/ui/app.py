@@ -20,6 +20,7 @@ from spqr.engine.world import SPEED_TICKS_PER_SEC, GameState, Speed
 from spqr.persistence import load_from_path, save_to_path
 from spqr.sim.systems import default_systems
 from spqr.ui.screens.build_menu import BuildMenuScreen
+from spqr.ui.screens.config import ConfigResult, ConfigScreen
 from spqr.ui.screens.info import GraphScreen, InfoResult, InfoScreen
 from spqr.ui.screens.population import PopulationScreen
 from spqr.ui.widgets.inspector import Inspector
@@ -59,8 +60,8 @@ class SpqrApp(App):
         Binding("space", "toggle_pause", "Pause"),
         Binding("plus,equals_sign,equal", "speed_up", "Faster"),
         Binding("minus", "speed_down", "Slower"),
-        Binding("c", "view_city", "City"),
-        Binding("r", "view_region", "Region"),
+        Binding("r", "view_toggle", "Region/City"),
+        Binding("c", "configure", "Configure"),
         Binding("up", "cursor(0,-1)", "↑", show=False),
         Binding("down", "cursor(0,1)", "↓", show=False),
         Binding("left", "cursor(-1,0)", "←", show=False),
@@ -166,13 +167,13 @@ class SpqrApp(App):
         s = self.engine.state.speed
         self.engine.submit(SetSpeed(max(int(Speed.PAUSED), int(s) - 1)))
 
-    def action_view_city(self) -> None:
-        self.view_mode = "city"
-
-    def action_view_region(self) -> None:
-        # Drag is meaningful only on the city map.
-        self._clear_drag()
-        self.view_mode = "region"
+    def action_view_toggle(self) -> None:
+        if self.view_mode == "region":
+            self.view_mode = "city"
+        else:
+            # Drag is meaningful only on the city map.
+            self._clear_drag()
+            self.view_mode = "region"
 
     def action_cursor(self, dx: int, dy: int) -> None:
         if self._city_map is None or self.view_mode != "city":
@@ -225,14 +226,29 @@ class SpqrApp(App):
             self.push_screen(
                 GraphScreen(self.engine.state, result.granary_id)
             )
-        elif result.kind == "cycle_crop" and result.farm_id is not None:
-            from spqr.engine.commands import SetFarmCrop
-            from spqr.sim.models import Crop
 
-            farm = self.engine.state.player_city().buildings[result.farm_id]
-            members = list(Crop)
-            next_crop = members[(members.index(Crop(farm.crop)) + 1) % len(members)]
-            self.engine.submit(SetFarmCrop(result.farm_id, int(next_crop)))
+    def action_configure(self) -> None:
+        if self._city_map is None or self.view_mode != "city":
+            return
+        city = self.engine.state.player_city()
+        x, y = self._city_map.cursor_x, self._city_map.cursor_y
+        if not city.in_bounds(x, y):
+            return
+        tile = city.tile(x, y)
+        if tile.building_id == -1:
+            return
+        self.push_screen(
+            ConfigScreen(self.engine.state, tile.building_id),
+            self._on_config_dismissed,
+        )
+
+    def _on_config_dismissed(self, result: ConfigResult | None) -> None:
+        if result is None or result.kind == "close":
+            return
+        if result.kind == "set_crop" and result.farm_id is not None:
+            from spqr.engine.commands import SetFarmCrop
+
+            self.engine.submit(SetFarmCrop(result.farm_id, int(result.crop)))
 
     def _set_range_highlight(self, granary_id: int) -> None:
         from spqr.sim.models import GRANARY_REACH_COST

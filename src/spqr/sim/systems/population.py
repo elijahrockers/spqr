@@ -11,8 +11,12 @@ from __future__ import annotations
 import random
 
 from spqr.engine.events import LogSeverity, push_log
-from spqr.engine.world import HOURS_PER_MONTH, HOURS_PER_WEEK, GameState
-from spqr.sim.models import BuildingKind, residence_capacity
+from spqr.engine.world import (
+    GameState,
+    is_first_of_month,
+    is_first_of_week,
+)
+from spqr.sim.models import BuildingKind
 
 
 # Monthly base rates (per individual). Tuned for slow but visible growth.
@@ -32,10 +36,8 @@ WEEKLY_OUTFLOW_RATE = 0.0125
 
 
 def step(state: GameState, rng: random.Random) -> None:
-    if state.tick == 0:
-        return
-    weekly = (state.tick % HOURS_PER_WEEK) == 0
-    monthly = (state.tick % HOURS_PER_MONTH) == 0
+    weekly = is_first_of_week(state.tick)
+    monthly = is_first_of_month(state.tick)
     if not weekly and not monthly:
         return
     for city in state.cities:
@@ -69,10 +71,10 @@ def step(state: GameState, rng: random.Random) -> None:
                 # Migration is gated on open house capacity. Empty district →
                 # no inflow. Overfilled or unhappy → outflow.
                 housing_cap = sum(
-                    residence_capacity(city.buildings[b_id])
+                    city.buildings[b_id].residence_capacity()
                     for b_id in d.building_ids
                     if city.buildings[b_id].kind == BuildingKind.RESIDENCE
-                    and city.buildings[b_id].completion >= 1.0
+                    and city.buildings[b_id].is_completed
                 )
                 open_slots = max(0.0, housing_cap - d.pops.plebs)
                 if open_slots > 0 and sat > 0.3:
