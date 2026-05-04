@@ -59,6 +59,23 @@ class SpqrApp(App):
     LogPanel {
         height: 1fr;
     }
+    Footer {
+        background: black;
+        color: white;
+    }
+    FooterKey {
+        background: black;
+        color: white;
+    }
+    FooterKey > .footer-key--key {
+        background: black;
+        color: ansi_bright_yellow;
+        text-style: bold;
+    }
+    FooterKey > .footer-key--description {
+        background: black;
+        color: ansi_bright_white;
+    }
     """
 
     BINDINGS = [
@@ -97,6 +114,11 @@ class SpqrApp(App):
         # by escape from main view.
         self._range_highlight: frozenset[tuple[int, int]] | None = None
         self._range_highlight_owner: int | None = None
+        # When a workshop / mill / quarry is "highlight ranged," these
+        # tiles render with a red background — the nuisance zone.
+        # Same lifecycle as range_highlight; cleared by escape.
+        self._nuisance_highlight: frozenset[tuple[int, int]] | None = None
+        self._nuisance_highlight_owner: int | None = None
         self._city_map: CityMap | None = None
         self._region_map: RegionMap | None = None
         self._status: StatusBar | None = None
@@ -143,9 +165,12 @@ class SpqrApp(App):
     def _refresh_widgets(self) -> None:
         # Update footprint preview before refreshing — when the OFFICE
         # tool is active, the cursor needs to show its 2×2 landing
-        # zone in green (or red if blocked).
+        # zone in green (or red if blocked). Same idea for the nuisance
+        # preview when an industrial tool is selected: red overlay
+        # showing the would-be smoke/noise zone.
         if self._city_map is not None:
             self._city_map.pending_footprint = self._compute_pending_footprint()
+            self._city_map.nuisance_highlight = self._compute_nuisance_overlay()
         if self._city_map is not None and self._city_map.display:
             self._city_map.refresh()
         if self._region_map is not None and self._region_map.display:
@@ -175,6 +200,33 @@ class SpqrApp(App):
             for dy in range(OFFICE_FOOTPRINT_H)
             for dx in range(OFFICE_FOOTPRINT_W)
         )
+
+    def _compute_nuisance_overlay(self) -> frozenset[tuple[int, int]] | None:
+        """Composite nuisance overlay: union of the sticky info-screen
+        highlight (set when the player presses 'r' on a workshop / mill
+        / quarry's info modal) and the live placement preview (when
+        an industrial tool is the active brush). Either or both may
+        be set; returning None tells the map to draw no overlay."""
+        if self._city_map is None:
+            return None
+        sticky = self._nuisance_highlight or frozenset()
+        live = frozenset()
+        if self._zone_tool in (
+            ZoneKind.WORKSHOP, ZoneKind.LUMBER_MILL, ZoneKind.QUARRY,
+        ):
+            from spqr.engine.tick import _ZONE_TO_BUILDING
+            from spqr.sim.systems.housing import nuisance_tiles_for_kind_at
+
+            cx, cy = self._city_map.cursor_x, self._city_map.cursor_y
+            kind = _ZONE_TO_BUILDING[self._zone_tool]
+            live = frozenset(
+                nuisance_tiles_for_kind_at(
+                    self.engine.state.player_city(), kind, cx, cy
+                )
+            )
+        if not sticky and not live:
+            return None
+        return sticky | live
 
     def watch_view_mode(self, mode: str) -> None:
         if self._city_map is None or self._region_map is None:
@@ -286,6 +338,8 @@ class SpqrApp(App):
             self.push_screen(
                 GraphScreen(self.engine.state, result.granary_id)
             )
+        elif result.kind == "nuisance" and result.nuisance_id is not None:
+            self._set_nuisance_highlight(result.nuisance_id)
 
     def action_configure(self) -> None:
         if self._city_map is None or self.view_mode != "city":
@@ -329,6 +383,27 @@ class SpqrApp(App):
             self.engine.submit(
                 SetWorkshopGood(result.building_id, int(result.good))
             )
+        elif (
+            result.kind == "set_warehouse_caps"
+            and result.building_id is not None
+            and result.cap_timber is not None
+            and result.cap_stone is not None
+            and result.cap_vegetables is not None
+            and result.cap_furniture is not None
+            and result.cap_stoneware is not None
+        ):
+            from spqr.engine.commands import SetWarehouseCaps
+
+            self.engine.submit(
+                SetWarehouseCaps(
+                    result.building_id,
+                    result.cap_timber,
+                    result.cap_stone,
+                    result.cap_vegetables,
+                    result.cap_furniture,
+                    result.cap_stoneware,
+                )
+            )
 
     def _set_range_highlight(self, granary_id: int) -> None:
         from spqr.sim.models import GRANARY_REACH_COST
@@ -357,16 +432,45 @@ class SpqrApp(App):
             self._city_map.range_highlight = None
             self._city_map.refresh()
 
+    def _set_nuisance_highlight(self, building_id: int) -> None:
+        from spqr.sim.systems.housing import nuisance_tiles_for
+
+        city = self.engine.state.player_city()
+        b = city.buildings[building_id]
+        tiles = nuisance_tiles_for(city, b)
+        self._nuisance_highlight = frozenset(tiles)
+        self._nuisance_highlight_owner = building_id
+        if self._city_map is not None:
+            self._city_map.nuisance_highlight = self._nuisance_highlight
+            self._city_map.refresh()
+        push_log(
+            self.engine.state.log,
+            self.engine.state.tick,
+            LogSeverity.INFO,
+            f"Highlighting {b.kind.name.lower().replace('_', ' ')} nuisance "
+            f"at ({b.x},{b.y}). Press escape to clear.",
+        )
+
+    def _clear_nuisance_highlight(self) -> None:
+        self._nuisance_highlight = None
+        self._nuisance_highlight_owner = None
+        if self._city_map is not None:
+            self._city_map.nuisance_highlight = None
+            self._city_map.refresh()
+
     def action_cancel(self) -> None:
         """Escape: cancels in this priority — drag, then range
-        highlight, then the active build tool. Clearing the tool last
-        gives the player a Vim-style reset; with neither a drag nor a
-        highlight in the way, escape drops the brush back to nothing."""
+        highlight, then nuisance highlight, then the active build tool.
+        Clearing the tool last gives the player a Vim-style reset; with
+        nothing in the way, escape drops the brush back to nothing."""
         if self._drag_anchor is not None:
             self.action_cancel_drag()
             return
         if self._range_highlight is not None:
             self._clear_range_highlight()
+            return
+        if self._nuisance_highlight is not None:
+            self._clear_nuisance_highlight()
             return
         if self._zone_tool is not None:
             self._set_zone_tool(None)

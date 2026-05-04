@@ -70,9 +70,8 @@ _ZONE_TO_BUILDING: dict[ZoneKind, BuildingKind] = {
 
 
 def _cost_string(zone: ZoneKind) -> str:
-    # Destructive tools (UNDESIGNATE, BULLDOZE) don't designate a
-    # building, so they have no BUILDING_COST entry. Show their fee
-    # via the override table instead.
+    # BULLDOZE doesn't designate a building so it has no BUILDING_COST
+    # entry. Show its fee via the override table instead.
     if zone in _TOOL_COST_OVERRIDE:
         return _TOOL_COST_OVERRIDE[zone]
     cost = BUILDING_COST[_ZONE_TO_BUILDING[zone]]
@@ -89,25 +88,22 @@ def _cost_string(zone: ZoneKind) -> str:
 # Category contents. Each entry: (hotkey, ZoneKind, label).
 _PRODUCTION_OPTIONS: list[tuple[str, ZoneKind, str]] = [
     ("f", ZoneKind.FARM,        "Farm        — wheat (up to 3 workers); switch crop with c"),
-    ("g", ZoneKind.GRANARY,     "Granary     — grain storage (2 workers)"),
-    ("W", ZoneKind.WAREHOUSE,   "Warehouse   — materials + vegetables storage"),
     ("L", ZoneKind.LUMBER_MILL, "Lumber mill — timber from forests (2 workers)"),
     ("Q", ZoneKind.QUARRY,      "Quarry      — stone (2 workers, requires timber)"),
     ("w", ZoneKind.WORKSHOP,    "Workshop    — furniture or stoneware (4 workers)"),
-    ("o", ZoneKind.OFFICE,      "Office      — admin reach + tax (2×2 footprint)"),
 ]
 
 _INFRASTRUCTURE_OPTIONS: list[tuple[str, ZoneKind, str]] = [
     ("r", ZoneKind.ROAD,        "Road        — connects tiles, extends reach"),
-    ("u", ZoneKind.UNDESIGNATE, "Undesignate — cancel construction (full refund)"),
-    ("z", ZoneKind.BULLDOZE,    "Bulldoze    — demolish (10d, salvage 50% materials)"),
+    ("g", ZoneKind.GRANARY,     "Granary     — grain storage (2 workers)"),
+    ("W", ZoneKind.WAREHOUSE,   "Warehouse   — materials + vegetables storage"),
+    ("o", ZoneKind.OFFICE,      "Office      — admin reach + tax (2×2 footprint)"),
 ]
 
 
 # Tools without a BUILDING_COST entry get an explicit cost label here.
 _TOOL_COST_OVERRIDE: dict[ZoneKind, str] = {
-    ZoneKind.UNDESIGNATE: "free",
-    ZoneKind.BULLDOZE: "10d",
+    ZoneKind.BULLDOZE: "free / 10d",
 }
 
 
@@ -129,7 +125,8 @@ $modal > Vertical {
 
 
 class BuildMenuScreen(ModalScreen[BuildMenuResult]):
-    """Top-level: pick a category or the direct Residence brush."""
+    """Top-level: pick a category, the direct Residence brush, or the
+    direct Bulldoze tool."""
 
     DEFAULT_CSS = _MODAL_CSS.replace("$modal", "BuildMenuScreen")
 
@@ -139,6 +136,7 @@ class BuildMenuScreen(ModalScreen[BuildMenuResult]):
         Binding("R", "pick_residence", show=False),
         Binding("p", "category('production')", show=False),
         Binding("i", "category('infrastructure')", show=False),
+        Binding("z", "pick_bulldoze", show=False),
         Binding("0", "clear_tool", show=False),
     ]
 
@@ -159,11 +157,15 @@ class BuildMenuScreen(ModalScreen[BuildMenuResult]):
             )
             yield Static(
                 _category_row("p", "Production",
-                              "farm, granary, mill, quarry, workshop, …")
+                              "farm, lumber mill, quarry, workshop")
             )
             yield Static(
                 _category_row("i", "Infrastructure",
-                              "roads (wells, gardens to come)")
+                              "roads, granary, warehouse, office, …")
+            )
+            yield Static(
+                _row("z", "Bulldoze", _cost_string(ZoneKind.BULLDOZE),
+                     marker_active=self._current == ZoneKind.BULLDOZE)
             )
             yield Static(_clear_row(self._current is None))
             yield Static("")
@@ -175,6 +177,9 @@ class BuildMenuScreen(ModalScreen[BuildMenuResult]):
 
     def action_pick_residence(self) -> None:
         self.dismiss(BuildMenuResult(kind="tool", tool=ZoneKind.RESIDENCE))
+
+    def action_pick_bulldoze(self) -> None:
+        self.dismiss(BuildMenuResult(kind="tool", tool=ZoneKind.BULLDOZE))
 
     def action_clear_tool(self) -> None:
         self.dismiss(BuildMenuResult(kind="tool", tool=None))
@@ -199,16 +204,14 @@ class BuildCategoryScreen(ModalScreen[ZoneKind | None]):
         Binding("b", "cancel", "Cancel"),
         # Production
         Binding("f", "pick('f')", show=False),
-        Binding("g", "pick('g')", show=False),
-        Binding("W", "pick('W')", show=False),
         Binding("L", "pick('L')", show=False),
         Binding("Q", "pick('Q')", show=False),
         Binding("w", "pick('w')", show=False),
-        Binding("o", "pick('o')", show=False),
         # Infrastructure
         Binding("r", "pick('r')", show=False),
-        Binding("u", "pick('u')", show=False),
-        Binding("z", "pick('z')", show=False),
+        Binding("g", "pick('g')", show=False),
+        Binding("W", "pick('W')", show=False),
+        Binding("o", "pick('o')", show=False),
     ]
 
     def __init__(self, category: str, current: ZoneKind | None) -> None:

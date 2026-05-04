@@ -28,7 +28,6 @@ from spqr.sim.models import (
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
     ROAD_DESIRABILITY_RADIUS,
-    WAREHOUSE_VEGETABLES_CAPACITY,
 )
 
 
@@ -37,12 +36,15 @@ class InfoResult:
     """What InfoScreen sends back to the App.
 
     `kind` is one of:
-      "close"     — modal dismissed; no further action
-      "highlight" — App should show this granary's coverage on the city map
-      "graph"     — App should open the inventory-history graph screen
+      "close"      — modal dismissed; no further action
+      "highlight"  — App should show this granary's coverage on the city map
+      "graph"      — App should open the inventory-history graph screen
+      "nuisance"   — App should show this industrial building's nuisance
+                     area on the city map (red overlay)
     """
     kind: str
     granary_id: int | None = None
+    nuisance_id: int | None = None
 
 
 # --- Info screen ------------------------------------------------------------
@@ -67,6 +69,10 @@ class _InfoBody(Widget):
             return _render_farm_info(b)
         if b.kind in (BuildingKind.RESIDENCE, BuildingKind.DOMUS):
             return _render_residence_info(city, b)
+        if b.kind in (
+            BuildingKind.WORKSHOP, BuildingKind.LUMBER_MILL, BuildingKind.QUARRY,
+        ):
+            return _render_industrial_info(city, b)
         return _render_generic_info(b)
 
 
@@ -109,13 +115,25 @@ class InfoScreen(ModalScreen[InfoResult]):
         b = self.state.player_city().buildings[self.building_id]
         return b.kind == BuildingKind.GRANARY
 
+    def _is_industrial(self) -> bool:
+        b = self.state.player_city().buildings[self.building_id]
+        return b.kind in (
+            BuildingKind.WORKSHOP, BuildingKind.LUMBER_MILL, BuildingKind.QUARRY,
+        )
+
     def action_close(self) -> None:
         self.dismiss(InfoResult(kind="close"))
 
     def action_highlight(self) -> None:
-        if not self._is_granary():
+        # Granary: show coverage. Industrial (workshop / mill / quarry):
+        # show nuisance footprint in red. Same hotkey, dispatch by kind.
+        if self._is_granary():
+            self.dismiss(InfoResult(kind="highlight", granary_id=self.building_id))
             return
-        self.dismiss(InfoResult(kind="highlight", granary_id=self.building_id))
+        if self._is_industrial():
+            self.dismiss(
+                InfoResult(kind="nuisance", nuisance_id=self.building_id)
+            )
 
     def action_graph(self) -> None:
         if not self._is_granary():
@@ -132,6 +150,56 @@ def _render_generic_info(b) -> Text:  # type: ignore[no-untyped-def]
     text.append(f"  Completion:  {int(b.completion * 100)}%\n", style="grey70")
     text.append(f"  Workers:     {b.workers_assigned}\n", style="grey70")
     text.append("\nescape / i to close\n", style="dim")
+    return text
+
+
+def _render_industrial_info(city: City, b) -> Text:  # type: ignore[no-untyped-def]
+    """Workshop / lumber mill / quarry detail. Shows the nuisance
+    radius and which residences inside the zone would be capped at
+    huts. The 'r' hotkey highlights the nuisance area on the city
+    map (red overlay) so the player can see the impact at a glance."""
+    from spqr.sim.models import Good, nuisance_radius_for
+
+    text = Text()
+    title = f"{b.kind.name.replace('_', ' ').title()} INFO"
+    text.append(f"{title}\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:    ({b.x}, {b.y})\n", style="grey70")
+    text.append(f"  Completion:  {int(b.completion * 100)}%\n", style="grey70")
+    text.append(
+        f"  Workers:     {b.workers_assigned}/{b.operational_worker_slots()}\n",
+        style="grey70",
+    )
+    if b.kind == BuildingKind.WORKSHOP:
+        good = Good(b.good)
+        output_name = good.name.lower()
+        text.append("  Producing:   ", style="grey70")
+        text.append(f"{output_name}\n", style="bright_yellow")
+
+    radius = nuisance_radius_for(b.kind)
+    text.append("\n")
+    text.append("  Nuisance:    ", style="grey70")
+    text.append(f"{radius} tile radius (Chebyshev)\n", style="red")
+    # Count affected residences: inside the (2r+1)² square.
+    affected = 0
+    for ob in city.completed_of(BuildingKind.RESIDENCE):
+        if abs(ob.x - b.x) <= radius and abs(ob.y - b.y) <= radius:
+            affected += 1
+    text.append("  Residences:  ", style="grey70")
+    affected_color = "red" if affected > 0 else "grey50"
+    text.append(
+        f"{affected} in nuisance zone (capped at huts)\n",
+        style=affected_color,
+    )
+    text.append(
+        "  Effect:      smoke/noise drags district satisfaction\n",
+        style="grey50",
+    )
+    text.append("\n")
+    text.append("  ")
+    text.append("R", style="bright_yellow")
+    text.append("  Highlight nuisance area in red\n\n")
+    text.append("escape / i to close\n", style="dim")
     return text
 
 
@@ -260,13 +328,14 @@ def _render_residence_info(city: City, b) -> Text:  # type: ignore[no-untyped-de
     text.append("\nWarehouses in reach:\n", style="bold grey70")
     if warehouses:
         for w, cost in sorted(warehouses, key=lambda t: t[1]):
-            pct = w.vegetables_stored / max(WAREHOUSE_VEGETABLES_CAPACITY, 1.0)
+            cap = max(w.warehouse_cap_vegetables, 1)
+            pct = w.vegetables_stored / cap
             color = "green" if pct >= 0.5 else "yellow" if pct >= 0.2 else "red"
             text.append(
                 f"  ({w.x},{w.y})  ", style="grey50"
             )
             text.append(
-                f"{w.vegetables_stored:>5.0f}/{int(WAREHOUSE_VEGETABLES_CAPACITY)} veg",
+                f"{w.vegetables_stored:>5.0f}/{int(w.warehouse_cap_vegetables)} veg",
                 style=color,
             )
             text.append(f"  cost {cost:.1f}\n", style="grey50")

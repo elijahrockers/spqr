@@ -4,10 +4,11 @@ desirability bonus and industrial nuisance penalty.
 Tier upgrades: a residence is designated at tier 0 (undeveloped land —
 squatter family). Each month, every completed residence with a road
 within RESIDENCE_AMENITY_REACH_COST tiles (Dijkstra over the same cost
-model the grain pipeline uses) and sufficient timber AND stone in the
-treasury advances one tier. Stops at RESIDENCE_MAX_TIER. Tier 1 (huts)
-needs only timber; tiers 2 (cottages) and 3 (insula) need both timber
-and stone, reflecting heavier masonry.
+model the grain pipeline uses) and sufficient materials in the treasury
+advances one tier. Stops at RESIDENCE_MAX_TIER. Tier 1 (huts) needs
+only timber; tier 2 (cottages) adds stone and furniture; tier 3
+(insula) adds stoneware on top, reflecting heavier masonry plus
+workshop-fed amenities.
 
 Tier 2 (cottages) has an additional gate: a completed OFFICE must be
 in reach. The office's reach scales with assigned workers
@@ -15,11 +16,12 @@ in reach. The office's reach scales with assigned workers
 densification a real cost — a city without admin infrastructure
 can't squeeze plebs into stone cottages.
 
-Industrial nuisance: residences within INDUSTRIAL_NUISANCE_RADIUS
-(Chebyshev) of any completed quarry or lumber mill cap at tier 1
+Industrial nuisance: residences within the per-kind nuisance radius
+(Chebyshev) of any completed mill / quarry / workshop cap at tier 1
 (huts) regardless of office or materials, and contribute a monthly
 satisfaction penalty to the district. The smoke and noise of
-production work makes nearby plots undesirable to upgrade.
+production work makes nearby plots undesirable to upgrade. Mills /
+quarries reach 5 tiles; workshops reach 3 (lighter industry).
 
 Road desirability: independent from tier gating. Each month a district's
 satisfaction is bumped by ROAD_DESIRABILITY_BONUS_PER_MONTH × fraction-
@@ -35,18 +37,20 @@ from spqr.engine.events import LogSeverity, push_log
 from spqr.engine.world import GameState, is_first_of_month
 from spqr.sim.models import (
     INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH,
-    INDUSTRIAL_NUISANCE_RADIUS,
     OFFICE_REACH_PER_WORKER,
     RESIDENCE_AMENITY_REACH_COST,
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
+    RESIDENCE_TIER_UPGRADE_FURNITURE_COST,
     RESIDENCE_TIER_UPGRADE_STONE_COST,
+    RESIDENCE_TIER_UPGRADE_STONEWARE_COST,
     RESIDENCE_TIER_UPGRADE_TIMBER_COST,
     ROAD_DESIRABILITY_BONUS_PER_MONTH,
     ROAD_DESIRABILITY_RADIUS,
     BuildingKind,
     City,
     Resources,
+    nuisance_radius_for,
 )
 
 from .spatial import coverage
@@ -59,9 +63,10 @@ COTTAGE_TIER: int = 2
 INDUSTRIAL_NUISANCE_TIER_CEILING: int = 1
 
 # Building kinds that emit industrial nuisance (smoke, noise) — caps
-# nearby residences and drags satisfaction.
+# nearby residences and drags satisfaction. Per-kind radii live in
+# `nuisance_radius_for` (sim/models/building.py).
 INDUSTRIAL_NUISANCE_KINDS: frozenset[BuildingKind] = frozenset(
-    {BuildingKind.LUMBER_MILL, BuildingKind.QUARRY}
+    {BuildingKind.LUMBER_MILL, BuildingKind.QUARRY, BuildingKind.WORKSHOP}
 )
 
 
@@ -89,9 +94,12 @@ def _upgrade_residences(state: GameState, city: City) -> None:
         if b.tier >= ceiling:
             continue
         next_tier = b.tier + 1
-        timber_cost = RESIDENCE_TIER_UPGRADE_TIMBER_COST[next_tier]
-        stone_cost = RESIDENCE_TIER_UPGRADE_STONE_COST[next_tier]
-        cost = Resources(timber=float(timber_cost), stone=float(stone_cost))
+        cost = Resources(
+            timber=float(RESIDENCE_TIER_UPGRADE_TIMBER_COST[next_tier]),
+            stone=float(RESIDENCE_TIER_UPGRADE_STONE_COST[next_tier]),
+            furniture=float(RESIDENCE_TIER_UPGRADE_FURNITURE_COST[next_tier]),
+            stoneware=float(RESIDENCE_TIER_UPGRADE_STONEWARE_COST[next_tier]),
+        )
         if not city.treasury.can_pay(cost):
             continue
         if not _has_road_in_reach(city, b.x, b.y):
@@ -191,13 +199,16 @@ def _road_within_chebyshev(city: City, x: int, y: int, radius: int) -> bool:
 
 
 def _industrial_nuisance_tiles(city: City) -> set[tuple[int, int]]:
-    """Set of (x, y) tiles within INDUSTRIAL_NUISANCE_RADIUS of any
-    completed industrial building (lumber mill, quarry). Chebyshev
-    distance — same shape as road desirability, but with a wider
-    radius reflecting how far smoke and noise carry."""
+    """Set of (x, y) tiles within the per-kind nuisance radius of any
+    completed industrial building. Chebyshev distance; mill / quarry
+    reach 5, workshop 3 (per `nuisance_radius_for`). Same shape as
+    road desirability, but radii reflect how far smoke and noise carry
+    by kind."""
     tiles: set[tuple[int, int]] = set()
-    radius = INDUSTRIAL_NUISANCE_RADIUS
     for kind in INDUSTRIAL_NUISANCE_KINDS:
+        radius = nuisance_radius_for(kind)
+        if radius <= 0:
+            continue
         for b in city.completed_of(kind):
             for dy in range(-radius, radius + 1):
                 for dx in range(-radius, radius + 1):
@@ -205,6 +216,40 @@ def _industrial_nuisance_tiles(city: City) -> set[tuple[int, int]]:
                     if city.in_bounds(nx, ny):
                         tiles.add((nx, ny))
     return tiles
+
+
+def nuisance_tiles_for(city: City, b) -> set[tuple[int, int]]:  # type: ignore[no-untyped-def]
+    """Per-building nuisance tile set — used by the UI to highlight a
+    single workshop/mill/quarry's footprint of effect, distinct from
+    the city-wide aggregate that powers tier capping."""
+    radius = nuisance_radius_for(b.kind)
+    if radius <= 0:
+        return set()
+    out: set[tuple[int, int]] = set()
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = b.x + dx, b.y + dy
+            if city.in_bounds(nx, ny):
+                out.add((nx, ny))
+    return out
+
+
+def nuisance_tiles_for_kind_at(
+    city: City, kind: BuildingKind, x: int, y: int
+) -> set[tuple[int, int]]:
+    """Compute the nuisance area a hypothetical building of `kind` at
+    (x, y) would emit. Used by the placement preview so the player
+    can see the impact zone before committing."""
+    radius = nuisance_radius_for(kind)
+    if radius <= 0:
+        return set()
+    out: set[tuple[int, int]] = set()
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = x + dx, y + dy
+            if city.in_bounds(nx, ny):
+                out.add((nx, ny))
+    return out
 
 
 def _apply_industrial_nuisance(city: City) -> None:

@@ -1,242 +1,101 @@
 # SPQR
 
 A terminal-based Roman city simulator — Dwarf Fortress × SimCity in the
-ancient Mediterranean. Procedurally generated province, pool-based
-population, deterministic tick-based simulation.
+ancient Mediterranean. Procedurally generated province, deterministic
+tick-based simulation, Textual TUI.
 
-This is an engine-first MVP: world generates, time advances, a small
-settlement runs itself, and you nudge it via zoning and policy.
+This document covers installation and the `spqr` command-line interface
+only. For gameplay, launch the TUI and explore in-game.
 
 ## Requirements
 
 - Python 3.12 or newer
-- A terminal that can render Textual (any modern terminal: kitty, alacritty,
-  iTerm2, Windows Terminal, GNOME Terminal, etc.)
+- A terminal capable of rendering [Textual](https://textual.textualize.io/)
+  (kitty, alacritty, iTerm2, Windows Terminal, GNOME Terminal, etc.)
+- No system packages or environment variables required
 
 ## Install
 
 ```bash
-git clone <this-repo> spqr   # or use your existing checkout
+git clone <this-repo> spqr
 cd spqr
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+The `[dev]` extra adds `pytest` and `pytest-asyncio`. For a runtime-only
+install, drop the extra:
+
+```bash
+pip install -e .
+```
+
+Installing exposes a `spqr` console script in addition to `python -m spqr`;
+both invoke the same entry point.
+
 ## Run
 
-Launch the TUI with a default seed:
+Launch the TUI:
 
 ```bash
-python -m spqr
+spqr                                    # or: python -m spqr
+spqr --seed 1234                        # specific world seed
+spqr --load saves/quick.spqr            # resume from a save
+spqr --no-splash                        # skip the start screen
 ```
 
-Pick a specific seed (same seed always generates the same world):
+The same world seed always generates the same world.
+
+## Headless mode
+
+Run the simulation without a TUI — useful for CI, balance testing, or
+determinism checks:
 
 ```bash
-python -m spqr --seed 1234
+spqr --headless --seed 42 --ticks 5000
 ```
 
-Resume a save:
+Prints a one-shot summary: date, city name, population, treasury, and
+the truncated state hash.
+
+For a determinism check, use `--hash-only` to print only the final hash:
 
 ```bash
-python -m spqr --load saves/quick.spqr
+spqr --headless --seed 42 --ticks 5000 --hash-only
+spqr --headless --seed 42 --ticks 5000 --hash-only
+# both runs print the same hash
 ```
 
-Run headless for a fixed number of ticks (useful for CI or balance
-testing):
+## Save files
 
-```bash
-python -m spqr --headless --seed 42 --ticks 5000
-python -m spqr --headless --seed 42 --ticks 5000 --hash-only
-```
+Save files are written to `saves/` relative to the current working
+directory. The directory is created on first save. The TUI's quick
+save/load (`s`/`l` in-game) uses `saves/quick.spqr`. To resume any save
+from the command line, pass its path to `--load`.
 
-## Controls
+## CLI reference
 
-| Key       | Action                                    |
-|-----------|-------------------------------------------|
-| `space`   | Toggle pause                              |
-| `+` / `-` | Speed up / slow down (PAUSED → 64×)       |
-| `c`       | City view                                 |
-| `r`       | Region view                               |
-| arrows    | Move the cursor (city view)               |
-| `b`       | Open the **build menu** (pick a zone tool)|
-| `p`       | Open the **population screen**            |
-| `i`       | Open the **info screen** for the building under the cursor |
-| `enter`   | Anchor first corner; press again to commit a rectangle |
-| `escape`  | Cancel: drag → range highlight (in that order) |
-| `s`       | Save to `saves/quick.spqr`                |
-| `l`       | Load from `saves/quick.spqr`              |
-| `q`       | Quit                                      |
+| Flag           | Default | Description |
+| -------------- | ------- | ----------- |
+| `--seed N`     | `42`    | World seed (deterministic — same seed → same world). |
+| `--load PATH`  | —       | Load a save file instead of generating a new world. |
+| `--headless`   | off     | Run without the TUI; advance `--ticks` and print a summary. |
+| `--ticks N`    | `1000`  | Number of ticks to advance in headless mode. |
+| `--hash-only`  | off     | With `--headless`, print only the final state hash. |
+| `--no-splash`  | off     | Skip the start-of-game splash and bootstrap directly with the existing-village default. |
 
-### Build menu
+One tick is one in-game hour.
 
-Press `b` to open. The menu lists the available zones with their hotkeys:
+## Tests
 
-| Key | Zone      | Cost (d/t/s) | Notes                              |
-|-----|-----------|--------------|------------------------------------|
-| `1` | Farm        | 20 / 10 / 0   | wheat by default (1 worker, monthly harvest); switch crop on info screen |
-| `2` | Residence   | 50 / 0 / 0    | tier-0 undeveloped plot (3 plebs); tiers up to huts/cottages/insula with road + materials |
-| `3` | Granary     | 40 / 15 / 10  | grain storage; 2 worker slots      |
-| `4` | Workshop    | 60 / 15 / 10  | 4 workers; future goods            |
-| `5` | Road        | 5 / 0 / 2     | connects tiles                     |
-| `6` | Warehouse   | 80 / 20 / 0   | +250 materials storage; holds vegetables |
-| `7` | Lumber mill | 80 / 0 / 10   | 2 workers; produces timber. **No timber to build** — bootstrap-friendly |
-| `8` | Quarry      | 100 / 20 / 0  | 2 workers; produces stone. Needs timber to build |
-| `0` | Clear       | —             | drops the active tool              |
-
-`d` denarii, `t` timber, `s` stone. Cost is paid at designation. If you
-designate a rectangle larger than your treasury can afford, only as many
-tiles as you can pay for are placed; the rest are skipped.
-
-Press `escape` (or `b` again) to leave the menu without changing the
-current tool. The active brush is shown in the bottom status bar and an
-asterisk marks it inside the menu.
-
-### Population screen
-
-Press `p` to view your city's population at a glance: class composition
-(patricians / plebs), labor utilization (workforce, worker slots,
-assigned, idle), housing capacity vs. homeless, and per-district
-satisfaction and unrest. The screen refreshes live while the sim runs
-underneath. `escape` or `p` closes it.
-
-### Info screen
-
-Press `i` while the cursor is over a building to open the info screen.
-For a **granary**, the screen offers two extra hotkeys:
-
-- `r` — **highlight range** on the city map. The granary's coverage
-  tiles render with a teal background so you can see at a glance which
-  insulae, domus, and farms it can serve. `escape` from the main view
-  clears the highlight.
-- `g` — **inventory graph**. ASCII bar chart of historical grain
-  inventory using up to 30 game days of stored samples. Inside the
-  graph, press `d` to toggle between hourly resolution (last ~60 hours)
-  and daily resolution (per-day average for up to 30 days). `escape`
-  closes the graph.
-
-Other building kinds show a generic info pane for now.
-
-### Designating zones in a rectangle
-
-Pick a tool (e.g. `1` for Farm), move the cursor to one corner, press
-`enter` to anchor. The cell turns yellow. Move to the opposite corner —
-the bounding rectangle highlights every tile inside it: green where the
-zone will be placed, red where it'll be skipped (water, rock,
-forest/hill, or already-occupied tiles). Press `enter` again to commit,
-or `escape` to cancel. A 1×1 rectangle (anchor and commit on the same
-cell) is a single-tile placement.
-
-## Reading the screen
-
-- **City map glyphs:** `.` grass · `T` forest · `^` hill · `~` water ·
-  `#` rock · `=` road. Buildings: `F` forum · `h` residence · `H` domus
-  · `f` farm · `G` granary · `W` workshop · `S` warehouse · `L` lumber
-  mill · `Q` quarry · `t` temple. Buildings rendered dim are still
-  under construction.
-- **Region map glyphs:** `@` your city · biomes follow the same
-  convention as city terrain, plus `M` for mountain.
-- **Status bar (bottom):** city name · in-game date (AUC year/month/day)
-  and hour · grain stock · denarii · total population · current speed ·
-  current zone tool.
-- **Tile inspector (right, top):** stats for whatever the cursor is
-  hovering over. Empty tiles show terrain and buildability. Buildings
-  show kind, completion, workers (assigned/slots), district. Farms
-  show a crop-maturity bar, the current season (growing/dormant),
-  grain awaiting transport, and yield per harvest. Granaries show
-  current grain inventory vs. capacity. Insulae and domus show how
-  many granaries are within reach (and total grain in those
-  granaries) plus the resident class and meal cadence. Storage-bearing
-  buildings (forum, warehouse) show their capacity and the city's
-  current timber/stone stocks vs. total storage cap.
-- **Annals panel (right, bottom):** rolling event log — births,
-  deaths, completions, treasury crises.
-
-## Tips for your first city
-
-- One tick = one in-game hour. At `1×`, simulation matches real time;
-  jump to `16×` or `64×` to skip across seasons quickly.
-- **You start on bare terrain.** No buildings, no population — just
-  500 denarii / 80 timber / 40 stone in the treasury. Population only
-  arrives once you've designated a residence plot.
-- **Residences are tiered, no construction needed.** Designating a
-  RESIDENCE places a tier-0 undeveloped plot instantly — no labor
-  required, cap of 3 plebs. The plot upgrades on its own once a road
-  sits within ~4 tiles and the treasury has the materials:
-  tier 1 huts (cap 6, 5 timber), tier 2 cottages (cap 15, 20 timber +
-  10 stone), tier 3 insula (cap 40, 50 timber + 25 stone), one tier
-  per game month. Stone gates the cottage→insula path, so plan for a
-  quarry early.
-- **Materials come from lumber mills + quarries.** A lumber mill
-  produces timber; a quarry produces stone. Both yields land in the
-  treasury and are capped by total warehouse storage — when stockpile
-  hits cap, production halts. Build more warehouses to keep producing.
-  The lumber mill needs no timber to build (bootstrap loop), but the
-  quarry does, so the natural order is: mill → quarry.
-- Plebs migrate in once a week proportional to satisfaction, so build
-  a house first; then a wheat farm and granary so your new arrivals
-  don't starve.
-- **Farms grow wheat by default.** A wheat farm uses 1 worker and
-  yields one harvest per month during the growing season — calibrated
-  so one wheat farm sustains one tier-1 (huts, 6 plebs) house. Press
-  `i` on a farm and `c` to switch to vegetables (4 workers, faster
-  cycle). Construction also pulls labor — a building site with no
-  spare workforce will sit at 0% until labor frees up.
-- **Vegetables ship to warehouses, plebs eat them too.** Build a
-  warehouse adjacent to a vegetables farm; harvested veg flows in like
-  grain flows to a granary. A house with **both a granary (with grain)
-  and a warehouse (with vegetables) in reach** gets the food-variety
-  bonus: satisfaction grows twice as fast, so migration accelerates.
-  Press `i` on a house to see "Food types: 2" when the bonus is
-  active. Patricians don't eat vegetables — they're grain-only.
-- **Grain is seasonal.** Farms grow crops only during the growing season
-  (March–September). A wheat farm matures and harvests once per month
-  during the season, yielding 150 grain per harvest. Outside the
-  growing season farms sit idle, so the city must stockpile enough to
-  bridge October–February. Harvested grain sits on the farm until
-  carted to the nearest in-range granary.
-- **Granaries feed houses by proximity.** Each granary serves the
-  surrounding tiles up to a Dijkstra cost of 12 — that's about 5
-  Manhattan tiles in open ground. Roads cost 1 per step (vs. 2.5 for
-  plain ground) and dramatically extend a granary's reach. A house
-  with no granary in range will starve regardless of total city
-  stockpile. Spread granaries; pave roads.
-- **Meals are scheduled events**, not a steady drip. Plebs eat once a
-  day (6 am), patricians twice a day (9/21). The granary inventory
-  drops in distinct steps at those hours and stays flat in between.
-- There's no materials storage at game start; build a **warehouse**
-  (+250 capacity) early — without it, lumber mill / quarry production
-  halts at cap. Once you've drained your starter timber + stone below
-  cap, mills and quarries refill the treasury.
-- Save (`s`) before risky decisions; load (`l`) restores the last save.
-
-## Verifying / hacking on the engine
-
-Run the test suite:
+`pytest` is installed by the `[dev]` extra. With the venv activated
+(`source .venv/bin/activate`), run:
 
 ```bash
 pytest
 ```
 
-Confirm a build is deterministic (same seed → same state hash):
-
-```bash
-python -m spqr --headless --seed 42 --ticks 5000 --hash-only
-python -m spqr --headless --seed 42 --ticks 5000 --hash-only
-# → identical hash
-```
-
-For deeper context on architecture, invariants, and gotchas, read
-`CLAUDE.md` and `JOURNAL.md`.
-
-## Status
-
-MVP. Working: tick loop, procgen terrain, basic economy (taxation +
-grain dole), two-tier demographics (plebs / patricians) starting from
-zero with migration-driven inflow, seasonal grain pipeline, tiered
-insulae that auto-upgrade with road amenities, save/load, TUI. Not yet
-implemented: water/aqueducts, multiple districts, multi-city play,
-trade. Military, named-citizen agents, and barbarian raids were
-intentionally cut from MVP scope to focus on peaceful builder
-mechanics.
+If you see `pytest: command not found`, either the venv isn't active in
+the current shell or you installed without the `[dev]` extra — re-run
+`pip install -e ".[dev]"` and try again.

@@ -81,8 +81,14 @@ class CityMap(Widget):
         self.cursor_y = city.height // 2
         # When set, render a preview rectangle from this anchor to the cursor.
         self.drag_anchor: tuple[int, int] | None = None
-        # When set, these tiles render with a teal "in range" background.
+        # When set, these tiles render with a teal "in range" background
+        # (e.g. granary coverage shown from the info screen).
         self.range_highlight: frozenset[tuple[int, int]] | None = None
+        # When set, these tiles render with a red "nuisance zone"
+        # background. Set from the workshop / mill / quarry info
+        # screen's `r` hotkey, or live from the placement preview when
+        # an industrial tool is active.
+        self.nuisance_highlight: frozenset[tuple[int, int]] | None = None
         # Tiles to highlight as "where this building will land" before
         # the player commits with Enter. Currently used by the OFFICE
         # tool to show its 2×2 footprint at the cursor.
@@ -95,6 +101,7 @@ class CityMap(Widget):
             self.cursor_y,
             self.drag_anchor,
             range_highlight=self.range_highlight,
+            nuisance_highlight=self.nuisance_highlight,
             pending_footprint=self.pending_footprint,
         )
 
@@ -124,6 +131,7 @@ def _render_city(
     *,
     flash_show_building: bool | None = None,
     range_highlight: frozenset[tuple[int, int]] | None = None,
+    nuisance_highlight: frozenset[tuple[int, int]] | None = None,
     pending_footprint: frozenset[tuple[int, int]] | None = None,
 ) -> Text:
     """Render the city tilemap. Pass `flash_show_building` explicitly in
@@ -133,7 +141,13 @@ def _render_city(
     `pending_footprint` shows the player where a fixed-shape brush
     (currently OFFICE 2×2) will land if Enter is pressed now.
     Highlighted tiles render dark-green if all are buildable, dark-red
-    if any are blocked — same colour scheme as the rectangle drag."""
+    if any are blocked — same colour scheme as the rectangle drag.
+
+    `nuisance_highlight` paints a dark-red background on industrial
+    nuisance tiles while preserving the underlying glyphs (terrain or
+    building) so the player can see whether a residence is being
+    affected. Layered above range_highlight; below pending_footprint,
+    drag rectangle, and cursor."""
     if flash_show_building is None:
         flash_show_building = (
             int(time.monotonic() / _FLASH_PHASE_SECONDS) % 2
@@ -179,6 +193,15 @@ def _render_city(
             # Range highlight underlies drag and cursor — drag/cursor wins.
             if range_highlight is not None and (x, y) in range_highlight:
                 style = Style(color=color, bgcolor="dark_cyan")
+            # Nuisance highlight: red background. Layered above range
+            # highlight (industry overrides coverage) but below
+            # placement / drag / cursor — those still need to be the
+            # primary signal during interaction.
+            if (
+                nuisance_highlight is not None
+                and (x, y) in nuisance_highlight
+            ):
+                style = Style(color=color, bgcolor="dark_red")
             in_footprint = (
                 pending_footprint is not None and (x, y) in pending_footprint
             )

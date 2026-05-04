@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import random
 
-from spqr.engine.events import LogSeverity, push_log
 from spqr.engine.world import GameState
 from spqr.sim.models import (
     CLASS_HOUSING,
@@ -37,7 +36,6 @@ from spqr.sim.models import (
     GROWING_SEASON_MONTHS,
     MEAL_INTERVAL_HOURS,
     MEAL_OFFSET_HOURS,
-    WAREHOUSE_VEGETABLES_CAPACITY,
     BuildingKind,
     City,
     Crop,
@@ -141,16 +139,8 @@ def _grow_and_harvest(state: GameState, city: City, in_season: bool) -> None:
             yielded = min(yield_amount, FARM_GRAIN_CAPACITY - stock)
             if b.crop == int(Crop.WHEAT):
                 b.grain_stored += yielded
-                produce = "grain"
             else:
                 b.vegetables_stored += yielded
-                produce = "vegetables"
-            push_log(
-                state.log,
-                state.tick,
-                LogSeverity.GOOD,
-                f"Farm at ({b.x},{b.y}) harvested {yielded:.0f} {produce}.",
-            )
 
 
 def _transport(
@@ -165,7 +155,7 @@ def _transport(
                 city, farm, granary_cov,
                 kind=BuildingKind.GRANARY,
                 stock_attr="grain_stored",
-                capacity=GRANARY_CAPACITY,
+                capacity_of=lambda b: GRANARY_CAPACITY,
             )
             if target is None:
                 continue
@@ -178,11 +168,13 @@ def _transport(
                 city, farm, warehouse_cov,
                 kind=BuildingKind.WAREHOUSE,
                 stock_attr="vegetables_stored",
-                capacity=WAREHOUSE_VEGETABLES_CAPACITY,
+                capacity_of=lambda b: float(b.warehouse_cap_vegetables),
             )
             if target is None:
                 continue
-            capacity_left = WAREHOUSE_VEGETABLES_CAPACITY - target.vegetables_stored
+            capacity_left = (
+                float(target.warehouse_cap_vegetables) - target.vegetables_stored
+            )
             amount = min(
                 GRAIN_TRANSPORT_RATE, farm.vegetables_stored, capacity_left
             )
@@ -197,16 +189,17 @@ def _nearest_storage_for_farm(
     *,
     kind: BuildingKind,
     stock_attr: str,
-    capacity: float,
+    capacity_of,  # type: ignore[no-untyped-def] Callable[[Building], float]
 ):  # type: ignore[no-untyped-def]
     """Find the nearest in-transport-reach storage building of `kind`
-    that still has capacity. Used for both grain (granary) and
-    vegetables (warehouse) transport."""
+    that still has capacity. Used for both grain (granary, fixed
+    capacity) and vegetables (warehouse, per-warehouse cap), so the
+    capacity is supplied as a callable per-building."""
     farm_reach = coverage(city, farm.x, farm.y, FARM_TRANSPORT_REACH_COST)
     best = None
     best_cost = float("inf")
     for b in city.completed_of(kind):
-        if getattr(b, stock_attr) >= capacity:
+        if getattr(b, stock_attr) >= capacity_of(b):
             continue
         c = farm_reach.get((b.x, b.y))
         if c is None:

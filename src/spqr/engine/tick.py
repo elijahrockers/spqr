@@ -14,6 +14,7 @@ from spqr.engine.commands import (
     SetResidenceTierCap,
     SetSpeed,
     SetTaxRate,
+    SetWarehouseCaps,
     SetWorkshopGood,
     TogglePause,
     ZoneKind,
@@ -115,6 +116,54 @@ class Engine:
                 self._set_workshop_good(building_id, good)
             case SetLaborPriority(priority):
                 self._set_labor_priority(priority)
+            case SetWarehouseCaps(
+                building_id, cap_t, cap_s, cap_v, cap_f, cap_w,
+            ):
+                self._set_warehouse_caps(
+                    building_id, cap_t, cap_s, cap_v, cap_f, cap_w,
+                )
+
+    def _set_warehouse_caps(
+        self,
+        building_id: int,
+        cap_timber: int,
+        cap_stone: int,
+        cap_vegetables: int,
+        cap_furniture: int,
+        cap_stoneware: int,
+    ) -> None:
+        """Apply a per-good cap split to a warehouse. Validates: building
+        must exist, must be a WAREHOUSE, all five caps >= 0, sum <=
+        WAREHOUSE_TOTAL_CAPACITY. Invalid input is silently dropped —
+        the UI shouldn't be able to produce an invalid split, so this
+        is a defense-in-depth gate. No log entry on success: warehouse
+        caps are a quiet config tweak, not an annal-worthy event."""
+        from spqr.sim.models import WAREHOUSE_TOTAL_CAPACITY
+
+        city = self.state.player_city()
+        if not (0 <= building_id < len(city.buildings)):
+            return
+        b = city.buildings[building_id]
+        if b.kind != BuildingKind.WAREHOUSE:
+            return
+        caps = (cap_timber, cap_stone, cap_vegetables, cap_furniture, cap_stoneware)
+        if any(c < 0 for c in caps):
+            return
+        if sum(caps) > WAREHOUSE_TOTAL_CAPACITY:
+            return
+        if (
+            b.warehouse_cap_timber == cap_timber
+            and b.warehouse_cap_stone == cap_stone
+            and b.warehouse_cap_vegetables == cap_vegetables
+            and b.warehouse_cap_furniture == cap_furniture
+            and b.warehouse_cap_stoneware == cap_stoneware
+        ):
+            return
+        b.warehouse_cap_timber = cap_timber
+        b.warehouse_cap_stone = cap_stone
+        b.warehouse_cap_vegetables = cap_vegetables
+        b.warehouse_cap_furniture = cap_furniture
+        b.warehouse_cap_stoneware = cap_stoneware
 
     def _set_residence_tier_cap(self, building_id: int, tier_cap: int) -> None:
         from spqr.sim.models import RESIDENCE_MAX_TIER, RESIDENCE_TIER_NAME
@@ -204,12 +253,8 @@ class Engine:
         if kind == ZoneKind.OFFICE:
             self._place_office_at(x1, y1)
             return
-        # Destructive tools route to dedicated removal handlers — they
-        # delete buildings instead of placing them, with their own
-        # refund and cost rules.
-        if kind == ZoneKind.UNDESIGNATE:
-            self._undesignate_rect(x1, y1, x2, y2)
-            return
+        # BULLDOZE routes to a dedicated removal handler — deletes
+        # buildings instead of placing them, with its own cost rules.
         if kind == ZoneKind.BULLDOZE:
             self._bulldoze_rect(x1, y1, x2, y2)
             return
@@ -269,29 +314,24 @@ class Engine:
                     f"{int(cost.denarii)}d {int(cost.timber)}t {int(cost.stone)}s.",
                 )
             return
-        if x_lo == x_hi and y_lo == y_hi:
+        # Successful designations are silent — they're visible on the
+        # map. Partial-fail skips still warn so the player knows why
+        # part of the rectangle didn't land.
+        if unaffordable:
             push_log(
                 self.state.log,
                 self.state.tick,
-                LogSeverity.INFO,
-                f"Designated {b_kind.name.lower()} at ({x_lo},{y_lo}).",
+                LogSeverity.WARNING,
+                f"{unaffordable} {b_kind.name.lower()} tile(s) skipped: "
+                "treasury empty.",
             )
-        else:
-            extras: list[str] = []
-            if unaffordable:
-                extras.append(f"{unaffordable} skipped: treasury empty")
-            if wrong_adjacency:
-                extras.append(
-                    f"{wrong_adjacency} skipped: needs adjacent "
-                    f"{_adjacency_terrain_name(b_kind)}"
-                )
-            tail = f" ({'; '.join(extras)})" if extras else ""
+        if wrong_adjacency:
             push_log(
                 self.state.log,
                 self.state.tick,
-                LogSeverity.INFO,
-                f"Designated {placed} {b_kind.name.lower()} tiles "
-                f"in ({x_lo},{y_lo})-({x_hi},{y_hi}).{tail}",
+                LogSeverity.WARNING,
+                f"{wrong_adjacency} {b_kind.name.lower()} tile(s) skipped: "
+                f"needs adjacent {_adjacency_terrain_name(b_kind)}.",
             )
 
     def _place_office_at(self, x: int, y: int) -> None:
@@ -342,74 +382,20 @@ class Engine:
         district = city.districts[0] if city.districts else None
         if district is not None:
             district.building_ids.append(building.id)
-        push_log(
-            self.state.log,
-            self.state.tick,
-            LogSeverity.INFO,
-            f"Designated office at ({x},{y}).",
-        )
 
     # --- Destructive tools -------------------------------------------------
-
-    def _undesignate_rect(
-        self, x1: int, y1: int, x2: int, y2: int
-    ) -> None:
-        """Cancel any under-construction designations inside the rect.
-        Each cancelled building refunds 100% of its BUILDING_COST.
-        Completed buildings are skipped — use bulldoze for those."""
-        city = self.state.player_city()
-        x_lo, x_hi = (x1, x2) if x1 <= x2 else (x2, x1)
-        y_lo, y_hi = (y1, y2) if y1 <= y2 else (y2, y1)
-        seen_ids: set[int] = set()
-        removed = 0
-        skipped_completed = 0
-        for y in range(y_lo, y_hi + 1):
-            for x in range(x_lo, x_hi + 1):
-                if not city.in_bounds(x, y):
-                    continue
-                tile = city.tile(x, y)
-                if tile.building_id == -1:
-                    continue
-                b = city.buildings[tile.building_id]
-                if b.id in seen_ids:
-                    continue
-                seen_ids.add(b.id)
-                if b.is_completed:
-                    skipped_completed += 1
-                    continue
-                cost = BUILDING_COST.get(b.kind)
-                if cost is not None:
-                    city.treasury.denarii += cost.denarii
-                    city.treasury.timber += cost.timber
-                    city.treasury.stone += cost.stone
-                self._tombstone_building(b)
-                removed += 1
-        if removed == 0 and skipped_completed == 0:
-            return
-        if removed > 0:
-            push_log(
-                self.state.log,
-                self.state.tick,
-                LogSeverity.INFO,
-                f"Undesignated {removed} building(s); cost fully refunded.",
-            )
-        if skipped_completed > 0:
-            push_log(
-                self.state.log,
-                self.state.tick,
-                LogSeverity.WARNING,
-                f"Skipped {skipped_completed} completed building(s) — "
-                "use bulldoze (z) to demolish those.",
-            )
 
     def _bulldoze_rect(
         self, x1: int, y1: int, x2: int, y2: int
     ) -> None:
-        """Demolish buildings inside the rect. Each removal costs
-        BULLDOZE_DENARII_COST and refunds BULLDOZE_REFUND_FRACTION of
-        the original timber+stone (no denarii refund — that's gone to
-        operations). If the treasury can't pay the bulldoze fee, the
-        rest of the rect is skipped."""
+        """Remove buildings inside the rect.
+
+        Under construction: free — cancels the designation and refunds
+        100% of the BUILDING_COST (denarii + timber + stone).
+        Completed: costs BULLDOZE_DENARII_COST per building and refunds
+        BULLDOZE_REFUND_FRACTION of the original timber+stone (no
+        denarii back). If the treasury can't pay the fee for a completed
+        building, that building is skipped."""
         from spqr.sim.models import (
             BULLDOZE_DENARII_COST,
             BULLDOZE_REFUND_FRACTION,
@@ -419,7 +405,8 @@ class Engine:
         x_lo, x_hi = (x1, x2) if x1 <= x2 else (x2, x1)
         y_lo, y_hi = (y1, y2) if y1 <= y2 else (y2, y1)
         seen_ids: set[int] = set()
-        removed = 0
+        cancelled = 0
+        demolished = 0
         skipped_no_funds = 0
         for y in range(y_lo, y_hi + 1):
             for x in range(x_lo, x_hi + 1):
@@ -432,24 +419,40 @@ class Engine:
                 if b.id in seen_ids:
                     continue
                 seen_ids.add(b.id)
-                if city.treasury.denarii < BULLDOZE_DENARII_COST:
-                    skipped_no_funds += 1
-                    continue
-                city.treasury.denarii -= BULLDOZE_DENARII_COST
-                cost = BUILDING_COST.get(b.kind)
-                if cost is not None:
-                    city.treasury.timber += cost.timber * BULLDOZE_REFUND_FRACTION
-                    city.treasury.stone += cost.stone * BULLDOZE_REFUND_FRACTION
-                self._tombstone_building(b)
-                removed += 1
-        if removed == 0 and skipped_no_funds == 0:
+                if b.is_under_construction:
+                    cost = BUILDING_COST.get(b.kind)
+                    if cost is not None:
+                        city.treasury.denarii += cost.denarii
+                        city.treasury.timber += cost.timber
+                        city.treasury.stone += cost.stone
+                    self._tombstone_building(b)
+                    cancelled += 1
+                else:
+                    if city.treasury.denarii < BULLDOZE_DENARII_COST:
+                        skipped_no_funds += 1
+                        continue
+                    city.treasury.denarii -= BULLDOZE_DENARII_COST
+                    cost = BUILDING_COST.get(b.kind)
+                    if cost is not None:
+                        city.treasury.timber += cost.timber * BULLDOZE_REFUND_FRACTION
+                        city.treasury.stone += cost.stone * BULLDOZE_REFUND_FRACTION
+                    self._tombstone_building(b)
+                    demolished += 1
+        if cancelled == 0 and demolished == 0 and skipped_no_funds == 0:
             return
-        if removed > 0:
+        if cancelled > 0:
             push_log(
                 self.state.log,
                 self.state.tick,
                 LogSeverity.INFO,
-                f"Bulldozed {removed} building(s).",
+                f"Cancelled {cancelled} designation(s); cost fully refunded.",
+            )
+        if demolished > 0:
+            push_log(
+                self.state.log,
+                self.state.tick,
+                LogSeverity.INFO,
+                f"Bulldozed {demolished} building(s).",
             )
         if skipped_no_funds > 0:
             push_log(

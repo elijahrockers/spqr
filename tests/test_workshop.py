@@ -76,7 +76,9 @@ def test_furniture_workshop_consumes_timber_and_produces_furniture():
     eng.step(1)  # labor.step assigns workers
     assert ws.workers_assigned > 0
     timber_before = city.treasury.timber
-    furniture_before = city.treasury.furniture
+    # No warehouse in this setup, so furniture_capacity()=0 and output
+    # spills directly into the workshop's local buffer.
+    total_furniture_before = city.treasury.furniture + ws.furniture_stored
     eng.step(50)
     expected_in = (
         WORKSHOP_INPUT_PER_WORKER_PER_TICK * ws.workers_assigned * 50
@@ -87,7 +89,10 @@ def test_furniture_workshop_consumes_timber_and_produces_furniture():
     # Use float-tolerant comparison: 50 cumulative additions of a
     # non-binary-exact constant (0.03 × workers) accumulate FP noise.
     assert abs((timber_before - city.treasury.timber) - expected_in) < 1e-9
-    assert abs((city.treasury.furniture - furniture_before) - expected_out) < 1e-9
+    total_furniture_after = city.treasury.furniture + ws.furniture_stored
+    assert abs(
+        (total_furniture_after - total_furniture_before) - expected_out
+    ) < 1e-9
 
 
 def test_stoneware_workshop_consumes_stone_and_produces_stoneware():
@@ -95,7 +100,7 @@ def test_stoneware_workshop_consumes_stone_and_produces_stoneware():
     ws.good = int(Good.STONEWARE)
     eng.step(1)
     stone_before = city.treasury.stone
-    stoneware_before = city.treasury.stoneware
+    total_stoneware_before = city.treasury.stoneware + ws.stoneware_stored
     eng.step(50)
     expected_in = (
         WORKSHOP_INPUT_PER_WORKER_PER_TICK * ws.workers_assigned * 50
@@ -104,7 +109,10 @@ def test_stoneware_workshop_consumes_stone_and_produces_stoneware():
         WORKSHOP_OUTPUT_PER_WORKER_PER_TICK * ws.workers_assigned * 50
     )
     assert abs((stone_before - city.treasury.stone) - expected_in) < 1e-9
-    assert abs((city.treasury.stoneware - stoneware_before) - expected_out) < 1e-9
+    total_stoneware_after = city.treasury.stoneware + ws.stoneware_stored
+    assert abs(
+        (total_stoneware_after - total_stoneware_before) - expected_out
+    ) < 1e-9
 
 
 def test_workshop_halts_when_input_runs_out():

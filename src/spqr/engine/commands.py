@@ -6,8 +6,7 @@ from dataclasses import dataclass
 
 class ZoneKind(enum.IntEnum):
     """Player-placeable zones — a subset of BuildingKind that the user
-    can designate, plus two destructive tools (UNDESIGNATE and
-    BULLDOZE) that remove buildings instead of placing them."""
+    can designate, plus BULLDOZE which removes buildings instead."""
     FARM = 0
     RESIDENCE = 1
     GRANARY = 2
@@ -17,8 +16,7 @@ class ZoneKind(enum.IntEnum):
     LUMBER_MILL = 6
     QUARRY = 7
     OFFICE = 8
-    UNDESIGNATE = 9      # cancel an under-construction designation
-    BULLDOZE = 10        # demolish a completed building, salvage materials
+    BULLDOZE = 10        # remove building; free if under construction, 10d if completed
 
 
 @dataclass(slots=True)
@@ -99,6 +97,27 @@ class SetLaborPriority:
     priority: list[int]
 
 
+@dataclass(slots=True)
+class SetWarehouseCaps:
+    """Set a warehouse's per-good capacity allocation. Each value is
+    the cap for that good in this warehouse; the sum must be
+    <= WAREHOUSE_TOTAL_CAPACITY and each value must be >= 0. No-op
+    if the building isn't a WAREHOUSE or the caps fail validation.
+    Existing stored quantities are NOT discarded if the new cap is
+    below current stock — transport just stops adding more until
+    inventory drains under the new cap. The five goods are timber,
+    stone, vegetables, furniture, stoneware; the warehouse contributes
+    each cap to the corresponding city-wide treasury cap (vegetables
+    stays per-warehouse since each warehouse physically stores its
+    own veg)."""
+    building_id: int
+    cap_timber: int
+    cap_stone: int
+    cap_vegetables: int
+    cap_furniture: int
+    cap_stoneware: int
+
+
 Command = (
     TogglePause
     | SetSpeed
@@ -110,4 +129,5 @@ Command = (
     | SetResidenceTierCap
     | SetWorkshopGood
     | SetLaborPriority
+    | SetWarehouseCaps
 )

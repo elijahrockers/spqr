@@ -86,9 +86,9 @@ def test_place_zone_rect_skips_unaffordable_tiles():
     state = new_game(seed=1, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    # Cap timber so only 3 farms (3 * 10 = 30) can be afforded.
-    city.treasury.denarii = 10_000.0
-    city.treasury.timber = 30.0
+    # Cap denarii so only 3 farms (3 * 20 = 60) can be afforded.
+    city.treasury.denarii = 60.0
+    city.treasury.timber = 0.0
     city.treasury.stone = 0.0
 
     n_before = len(city.buildings)
@@ -96,8 +96,7 @@ def test_place_zone_rect_skips_unaffordable_tiles():
     eng.step(1)
     placed = len(city.buildings) - n_before
     assert placed == 3
-    assert city.treasury.timber == 0.0
-    assert city.treasury.denarii == 10_000.0 - 3 * 20
+    assert city.treasury.denarii == 0.0
 
 
 def test_place_zone_debits_treasury():
@@ -204,8 +203,26 @@ def test_total_storage_capacity_grows_when_warehouse_completes():
     # Still under construction — capacity unchanged.
     assert city.total_storage_capacity() == base_cap
     eng.step(400)
-    # Now completed; capacity should have grown by 250.
-    assert city.total_storage_capacity() == base_cap + 250
+    # Now completed; capacity should have grown by 120 — the warehouse's
+    # default 60 timber + 60 stone share of its 300-unit total. The
+    # remaining 180 (veg + furniture + stoneware) doesn't count toward
+    # materials storage (vegetables is per-warehouse food stash; the
+    # finished-goods caps live on city.furniture_capacity /
+    # city.stoneware_capacity).
+    assert city.total_storage_capacity() == base_cap + 120
+    # The full per-warehouse cap is 300 split across all five goods
+    # by the player-configurable allocation.
+    warehouse = next(
+        b for b in city.buildings if b.kind.name == "WAREHOUSE"
+    )
+    assert (
+        warehouse.warehouse_cap_timber
+        + warehouse.warehouse_cap_stone
+        + warehouse.warehouse_cap_vegetables
+        + warehouse.warehouse_cap_furniture
+        + warehouse.warehouse_cap_stoneware
+        == 300
+    )
 
 
 def test_place_zone_rect_normalizes_corners():

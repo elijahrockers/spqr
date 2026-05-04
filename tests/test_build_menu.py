@@ -28,6 +28,19 @@ def test_top_level_R_picks_residence_directly():
     assert captured[0].tool == ZoneKind.RESIDENCE
 
 
+def test_top_level_z_picks_bulldoze_directly():
+    """Bulldoze is a top-level direct pick (parity with Residence) — no
+    submenu detour. Removed from the Infrastructure submenu to avoid
+    duplication."""
+    screen = BuildMenuScreen(current=None)
+    captured: list[BuildMenuResult] = []
+    screen.dismiss = lambda r: captured.append(r)  # type: ignore[assignment]
+    screen.action_pick_bulldoze()
+    assert len(captured) == 1
+    assert captured[0].kind == "tool"
+    assert captured[0].tool == ZoneKind.BULLDOZE
+
+
 def test_top_level_p_opens_production_category():
     screen = BuildMenuScreen(current=None)
     captured: list[BuildMenuResult] = []
@@ -75,13 +88,12 @@ def test_production_submenu_picks_known_keys():
     screen = BuildCategoryScreen(CATEGORY_PRODUCTION, current=None)
     captured: list[ZoneKind | None] = []
     screen.dismiss = lambda r: captured.append(r)  # type: ignore[assignment]
-    # Spot-check several production hotkeys.
     screen.action_pick("f")
     assert captured[-1] == ZoneKind.FARM
     screen2 = BuildCategoryScreen(CATEGORY_PRODUCTION, current=None)
     screen2.dismiss = lambda r: captured.append(r)  # type: ignore[assignment]
-    screen2.action_pick("o")
-    assert captured[-1] == ZoneKind.OFFICE
+    screen2.action_pick("w")
+    assert captured[-1] == ZoneKind.WORKSHOP
 
 
 def test_production_submenu_ignores_infrastructure_keys():
@@ -104,6 +116,17 @@ def test_infrastructure_submenu_picks_road():
     assert captured[0] == ZoneKind.ROAD
 
 
+def test_infrastructure_submenu_picks_granary_warehouse_office():
+    """Granary, warehouse, and office moved to Infrastructure — confirm
+    their hotkeys resolve correctly in that submenu."""
+    for hotkey, expected in (("g", ZoneKind.GRANARY), ("W", ZoneKind.WAREHOUSE), ("o", ZoneKind.OFFICE)):
+        screen = BuildCategoryScreen(CATEGORY_INFRASTRUCTURE, current=None)
+        captured: list[ZoneKind | None] = []
+        screen.dismiss = lambda r: captured.append(r)  # type: ignore[assignment]
+        screen.action_pick(hotkey)
+        assert captured[0] == expected, f"hotkey {hotkey!r} should pick {expected}"
+
+
 def test_infrastructure_submenu_ignores_production_keys():
     screen = BuildCategoryScreen(CATEGORY_INFRASTRUCTURE, current=None)
     captured: list[ZoneKind | None] = []
@@ -113,8 +136,8 @@ def test_infrastructure_submenu_ignores_production_keys():
 
 
 def test_submenu_escape_returns_current_tool():
-    screen = BuildCategoryScreen(CATEGORY_PRODUCTION, current=ZoneKind.GRANARY)
+    screen = BuildCategoryScreen(CATEGORY_PRODUCTION, current=ZoneKind.FARM)
     captured: list[ZoneKind | None] = []
     screen.dismiss = lambda r: captured.append(r)  # type: ignore[assignment]
     screen.action_cancel()
-    assert captured[0] == ZoneKind.GRANARY
+    assert captured[0] == ZoneKind.FARM

@@ -9,6 +9,12 @@ Per building kind, presents the configurable options:
     when materials and roads are available.
   - WORKSHOP: which good is produced. Furniture consumes timber;
     stoneware consumes stone. Switching is instant.
+  - WAREHOUSE: per-good capacity split. The total per-warehouse cap is
+    fixed (WAREHOUSE_TOTAL_CAPACITY); the player picks a preset that
+    distributes that cap across timber, stone, and vegetables. Default
+    is uniform (100/100/100). Reducing a category's cap below current
+    stock does NOT discard inventory — transport just stops adding
+    more until the inventory drains under the new cap.
 
 Other building kinds open with a "nothing to configure" hint so the
 dialog is still discoverable everywhere."""
@@ -29,6 +35,7 @@ from spqr.sim.models import (
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_CAPACITY,
     RESIDENCE_TIER_NAME,
+    WAREHOUSE_TOTAL_CAPACITY,
     BuildingKind,
     Crop,
     Good,
@@ -45,12 +52,14 @@ class ConfigResult:
     """Returned by ConfigScreen on dismiss.
 
     `kind` is one of:
-      "close"        — modal dismissed; no further action
-      "set_crop"     — App should apply `crop` to the farm `farm_id`
-      "set_tier_cap" — App should set RESIDENCE `building_id`'s
-                       tier_cap to `tier_cap`
-      "set_good"     — App should set WORKSHOP `building_id`'s good
-                       to `good`
+      "close"               — modal dismissed; no further action
+      "set_crop"            — App should apply `crop` to the farm `farm_id`
+      "set_tier_cap"        — App should set RESIDENCE `building_id`'s
+                              tier_cap to `tier_cap`
+      "set_good"            — App should set WORKSHOP `building_id`'s good
+                              to `good`
+      "set_warehouse_caps"  — App should apply (cap_timber, cap_stone,
+                              cap_vegetables) to WAREHOUSE `building_id`
     """
     kind: str
     farm_id: int | None = None
@@ -58,6 +67,11 @@ class ConfigResult:
     building_id: int | None = None
     tier_cap: int | None = None
     good: Good | None = None
+    cap_timber: int | None = None
+    cap_stone: int | None = None
+    cap_vegetables: int | None = None
+    cap_furniture: int | None = None
+    cap_stoneware: int | None = None
 
 
 class _ConfigBody(Widget):
@@ -86,6 +100,8 @@ class _ConfigBody(Widget):
             return _render_residence_config(b)
         if b.kind == BuildingKind.WORKSHOP:
             return _render_workshop_config(b)
+        if b.kind == BuildingKind.WAREHOUSE:
+            return _render_warehouse_config(b)
         return _render_no_config(b)
 
 
@@ -124,9 +140,14 @@ class ConfigScreen(ModalScreen[ConfigResult]):
         Binding("h", "pick_char('h')", show=False),
         Binding("o", "pick_char('o')", show=False),
         Binding("i", "pick_char('i')", show=False),
-        # Workshop good picker
+        # Workshop good picker (also reused by warehouse food preset)
         Binding("f", "pick_char('f')", show=False),
         Binding("s", "pick_char('s')", show=False),
+        # Warehouse cap presets (additional to s/v/f reused above)
+        Binding("b", "pick_char('b')", show=False),
+        Binding("r", "pick_char('r')", show=False),
+        Binding("g", "pick_char('g')", show=False),
+        Binding("t", "pick_char('t')", show=False),
     ]
 
     # Character hotkey → crop / tier_cap / good value. Source of truth
@@ -144,6 +165,20 @@ class ConfigScreen(ModalScreen[ConfigResult]):
     _WORKSHOP_KEY_TO_GOOD: dict[str, "Good"] = {
         "f": Good.FURNITURE,
         "s": Good.STONEWARE,
+    }
+    # Warehouse cap presets — tuples of (timber, stone, veg, furniture,
+    # stoneware). Sums equal WAREHOUSE_TOTAL_CAPACITY (300). Keys
+    # overlap with workshop / farm hotkeys (s, v, f), but the
+    # dispatcher routes by building kind, so a key only fires the
+    # warehouse preset when the focused building IS a warehouse.
+    _WAREHOUSE_KEY_TO_CAPS: dict[str, tuple[int, int, int, int, int]] = {
+        "b": (60, 60, 60, 60, 60),    # balanced (default)
+        "r": (90, 90, 60, 30, 30),    # raw-heavy: timber/stone leading
+        "f": (0, 0, 300, 0, 0),       # food only — pure vegetables
+        "g": (0, 0, 0, 150, 150),     # finished goods only
+        "t": (150, 0, 0, 150, 0),     # timber + furniture pipeline
+        "s": (0, 150, 0, 0, 150),     # stone + stoneware pipeline
+        "v": (50, 50, 150, 25, 25),   # vegetables-heavy
     }
 
     def __init__(self, state: GameState, building_id: int) -> None:
@@ -170,6 +205,10 @@ class ConfigScreen(ModalScreen[ConfigResult]):
         b = self.state.player_city().buildings[self.building_id]
         return b.kind == BuildingKind.WORKSHOP
 
+    def _is_warehouse(self) -> bool:
+        b = self.state.player_city().buildings[self.building_id]
+        return b.kind == BuildingKind.WAREHOUSE
+
     def _refresh(self) -> None:
         # Modal may not be mounted in unit tests that drive actions
         # directly; query_one raises in that case. Guard so the action
@@ -189,6 +228,8 @@ class ConfigScreen(ModalScreen[ConfigResult]):
           - FARM: w=wheat, v=vegetables
           - RESIDENCE: u/h/o/i = undeveloped/huts/cottages/insula
           - WORKSHOP: f=furniture, s=stoneware
+          - WAREHOUSE: b/m/f/t/s/v = balanced/materials/food/
+                       timber-heavy/stone-heavy/veg-heavy presets
         Keys irrelevant to the focused building kind are no-ops."""
         if self._is_farm():
             crop = self._FARM_KEY_TO_CROP.get(key)
@@ -207,6 +248,12 @@ class ConfigScreen(ModalScreen[ConfigResult]):
             if good is None:
                 return
             self._select_good(good)
+            return
+        if self._is_warehouse():
+            caps = self._WAREHOUSE_KEY_TO_CAPS.get(key)
+            if caps is None:
+                return
+            self._select_warehouse_caps(*caps)
 
     def _select_crop(self, new_crop: Crop) -> None:
         b = self.state.player_city().buildings[self.building_id]
@@ -246,6 +293,36 @@ class ConfigScreen(ModalScreen[ConfigResult]):
                 kind="set_good",
                 building_id=self.building_id,
                 good=new_good,
+            )
+        )
+
+    def _select_warehouse_caps(
+        self,
+        cap_timber: int,
+        cap_stone: int,
+        cap_vegetables: int,
+        cap_furniture: int,
+        cap_stoneware: int,
+    ) -> None:
+        b = self.state.player_city().buildings[self.building_id]
+        if (
+            b.warehouse_cap_timber == cap_timber
+            and b.warehouse_cap_stone == cap_stone
+            and b.warehouse_cap_vegetables == cap_vegetables
+            and b.warehouse_cap_furniture == cap_furniture
+            and b.warehouse_cap_stoneware == cap_stoneware
+        ):
+            self.dismiss(ConfigResult(kind="close"))
+            return
+        self.dismiss(
+            ConfigResult(
+                kind="set_warehouse_caps",
+                building_id=self.building_id,
+                cap_timber=cap_timber,
+                cap_stone=cap_stone,
+                cap_vegetables=cap_vegetables,
+                cap_furniture=cap_furniture,
+                cap_stoneware=cap_stoneware,
             )
         )
 
@@ -397,6 +474,74 @@ def _render_workshop_config(b) -> Text:  # type: ignore[no-untyped-def]
         text.append(f"  {good.name.lower():<12}")
         text.append(f"  consumes {good_to_input[good]}", style="grey50")
         text.append("\n")
+    text.append("\nescape / c to close\n", style="dim")
+    return text
+
+
+def _render_warehouse_config(b) -> Text:  # type: ignore[no-untyped-def]
+    text = Text()
+    text.append("CONFIGURE WAREHOUSE\n", style="bold")
+    text.append("─" * 40 + "\n\n", style="grey50")
+    text.append(f"  Position:  ({b.x}, {b.y})\n", style="grey70")
+    text.append(
+        f"  Capacity:  {WAREHOUSE_TOTAL_CAPACITY} units (split across goods)\n",
+        style="grey70",
+    )
+    text.append("\n  Current allocation:\n", style="grey70")
+    text.append(
+        f"    timber  {b.warehouse_cap_timber:>3}\n", style="bright_white",
+    )
+    text.append(
+        f"    stone   {b.warehouse_cap_stone:>3}\n", style="bright_white",
+    )
+    text.append(
+        f"    veg     {b.warehouse_cap_vegetables:>3}",
+        style="bright_white",
+    )
+    text.append(f"   ({b.vegetables_stored:.0f} stored)\n", style="grey50")
+    text.append(
+        f"    furn    {b.warehouse_cap_furniture:>3}\n", style="bright_white",
+    )
+    text.append(
+        f"    stwr    {b.warehouse_cap_stoneware:>3}\n", style="bright_white",
+    )
+
+    text.append("\n  Pick a preset:\n\n")
+    presets = [
+        ("b", "balanced",      (60, 60, 60, 60, 60)),
+        ("r", "raw-heavy",     (90, 90, 60, 30, 30)),
+        ("f", "food only",     (0, 0, 300, 0, 0)),
+        ("g", "goods only",    (0, 0, 0, 150, 150)),
+        ("t", "timber+furn",   (150, 0, 0, 150, 0)),
+        ("s", "stone+stwr",    (0, 150, 0, 0, 150)),
+        ("v", "veg-heavy",     (50, 50, 150, 25, 25)),
+    ]
+    current = (
+        b.warehouse_cap_timber,
+        b.warehouse_cap_stone,
+        b.warehouse_cap_vegetables,
+        b.warehouse_cap_furniture,
+        b.warehouse_cap_stoneware,
+    )
+    for hotkey, label, caps in presets:
+        is_current = caps == current
+        text.append("  ")
+        if is_current:
+            text.append("*", style="bright_green")
+        else:
+            text.append(" ")
+        text.append(" ")
+        text.append(hotkey, style="bright_yellow")
+        text.append(f"  {label:<13}")
+        text.append(
+            f"  {caps[0]}t/{caps[1]}s/{caps[2]}v/{caps[3]}f/{caps[4]}w\n",
+            style="grey50",
+        )
+    text.append(
+        "\n  Note: lowering a cap below current stock does not\n"
+        "  discard goods — transport just stops adding more.\n",
+        style="grey50",
+    )
     text.append("\nescape / c to close\n", style="dim")
     return text
 

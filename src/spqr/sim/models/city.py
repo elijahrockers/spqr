@@ -6,9 +6,10 @@ import msgspec
 
 from .building import (
     DEFAULT_LABOR_PRIORITY,
+    FORUM_STONE_CAPACITY,
+    FORUM_TIMBER_CAPACITY,
     LUMBER_MILL_ADJACENT_TERRAINS,
     QUARRY_ADJACENT_TERRAINS,
-    STORAGE_CAPACITY,
     Building,
     BuildingKind,
 )
@@ -75,24 +76,69 @@ class City(msgspec.Struct, frozen=False):
             if b.kind == kind and b.is_completed:
                 yield b
 
-    def total_storage_capacity(self) -> int:
-        """Sum of materials storage across all completed storage-bearing
-        buildings (forum, warehouses). Caps how much timber + stone the
-        city can hold; industry production halts when stocks reach it."""
+    def timber_capacity(self) -> int:
+        """City-wide timber cap in the treasury — the sum of every
+        completed warehouse's `warehouse_cap_timber` plus a fixed
+        contribution from each completed forum. Industry halts mill
+        production when treasury.timber reaches this."""
         cap = 0
         for b in self.buildings:
             if not b.is_completed:
                 continue
-            cap += STORAGE_CAPACITY.get(b.kind, 0)
+            if b.kind == BuildingKind.WAREHOUSE:
+                cap += b.warehouse_cap_timber
+            elif b.kind == BuildingKind.FORUM:
+                cap += FORUM_TIMBER_CAPACITY
         return cap
 
+    def stone_capacity(self) -> int:
+        """City-wide stone cap. Same shape as timber_capacity but reads
+        each warehouse's `warehouse_cap_stone` and forum's stone share."""
+        cap = 0
+        for b in self.buildings:
+            if not b.is_completed:
+                continue
+            if b.kind == BuildingKind.WAREHOUSE:
+                cap += b.warehouse_cap_stone
+            elif b.kind == BuildingKind.FORUM:
+                cap += FORUM_STONE_CAPACITY
+        return cap
+
+    def furniture_capacity(self) -> int:
+        """City-wide furniture cap — sum of every completed warehouse's
+        `warehouse_cap_furniture`. The forum doesn't store finished
+        goods. Workshops producing furniture halt when the treasury
+        reaches this and the workshop's local buffer is also full."""
+        cap = 0
+        for b in self.buildings:
+            if not b.is_completed:
+                continue
+            if b.kind == BuildingKind.WAREHOUSE:
+                cap += b.warehouse_cap_furniture
+        return cap
+
+    def stoneware_capacity(self) -> int:
+        """City-wide stoneware cap. Same shape as furniture_capacity."""
+        cap = 0
+        for b in self.buildings:
+            if not b.is_completed:
+                continue
+            if b.kind == BuildingKind.WAREHOUSE:
+                cap += b.warehouse_cap_stoneware
+        return cap
+
+    def total_storage_capacity(self) -> int:
+        """Combined timber + stone cap. Inspector / status displays
+        still want one number, but industry must check the per-material
+        caps separately so a warehouse dedicated to timber doesn't
+        let stone production overflow."""
+        return self.timber_capacity() + self.stone_capacity()
+
     def stored_materials(self) -> float:
-        """Combined timber + stone currently held in the treasury;
-        checked against `total_storage_capacity` by the industry
-        system. Per-building local buffers (mill / quarry) are NOT
-        counted here — they live outside the warehouse network and
-        production overflows into them only when the treasury cap
-        is full."""
+        """Combined timber + stone currently held in the treasury.
+        Inspector display only — industry compares per-material treasury
+        amounts against per-material caps. Per-building local buffers
+        (mill / quarry) are NOT counted here."""
         return self.treasury.timber + self.treasury.stone
 
     def available_timber(self) -> float:

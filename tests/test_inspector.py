@@ -29,34 +29,36 @@ def _three_residences():
 
 
 def test_per_residence_occupancy_sums_to_rounded_district_pop():
-    """The original bug: 5 plebs across 3 tier-0 residences (cap 3 each)
-    rendered as 2/3 in each, summing to 6 — one more than the status
-    bar's 5. Allocation must sum to round(district.pops.plebs)."""
+    """The original bug shape: a fractional district pop split across N
+    tier-0 residences (cap 2 each) rendered with independent rounding
+    over-counted vs. the status bar. Allocation must sum to
+    round(district.pops.plebs)."""
     city, residences = _three_residences()
-    city.districts[0].pops.plebs = 5.0
+    city.districts[0].pops.plebs = 4.0
     occs = [_residence_occupancy(city, r) for r in residences]
-    assert sum(occs) == 5
+    assert sum(occs) == 4
     # And every per-residence value is within capacity.
     for r, occ in zip(residences, occs):
         assert 0 <= occ <= r.residence_capacity()
 
 
 def test_per_residence_occupancy_rounds_with_status_bar():
-    """7.5 plebs: status bar `:.0f` rounds to 8 (banker's rounding rounds
-    half to even, so 7.5 → 8). Per-residence sum must match."""
+    """4.5 plebs: status bar `:.0f` rounds to 4 (banker's rounding
+    rounds half to even, so 4.5 → 4). Per-residence sum must match."""
     city, residences = _three_residences()
-    city.districts[0].pops.plebs = 7.5
+    city.districts[0].pops.plebs = 4.5
     occs = [_residence_occupancy(city, r) for r in residences]
-    assert sum(occs) == round(7.5)
+    assert sum(occs) == round(4.5)
 
 
 def test_full_district_assigns_capacity_to_every_residence():
-    """At capacity (9 plebs / 9 cap), every residence should be exactly
-    full so all three render bright_green."""
+    """At capacity (6 plebs / 6 cap, three tier-0 residences at cap 2),
+    every residence should be exactly full so all three render
+    bright_green."""
     city, residences = _three_residences()
-    city.districts[0].pops.plebs = 9.0
+    city.districts[0].pops.plebs = 6.0
     occs = [_residence_occupancy(city, r) for r in residences]
-    assert occs == [3, 3, 3]
+    assert occs == [2, 2, 2]
     for r, occ in zip(residences, occs):
         assert occ == r.residence_capacity()
 

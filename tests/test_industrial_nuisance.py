@@ -33,6 +33,10 @@ def _empty_city():
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 200.0
+    # Cottages now require furniture; insulae require stoneware. Seed
+    # generously so nuisance tests aren't gated on production setup.
+    city.treasury.furniture = 200.0
+    city.treasury.stoneware = 100.0
     return state, eng, city
 
 
@@ -78,8 +82,8 @@ def _designate_residence_road_office_and_industry(eng, city, *, with_mill=True):
     eng.submit(PlaceZone(x=7, y=row_y, kind=ZoneKind.OFFICE))
     if with_mill:
         # Mill at x=4: Chebyshev distance from residence (x=1) is 3,
-        # which is < INDUSTRIAL_NUISANCE_RADIUS=4, so the residence
-        # falls in the nuisance zone. The engine now requires forest
+        # which is < INDUSTRIAL_NUISANCE_RADIUS=5, so the residence
+        # falls in the nuisance zone. The engine requires forest
         # adjacent to the mill — paint one in.
         paint_adjacent_terrain(city, 4, row_y - 1, CityTerrain.FOREST)
         eng.submit(PlaceZone(x=4, y=row_y - 1, kind=ZoneKind.LUMBER_MILL))
@@ -115,6 +119,9 @@ def test_same_layout_without_mill_reaches_cottages():
     tier 2 — confirms the mill is the gate, not some other limit."""
     _state, eng, city = _empty_city()
     res, _ = _designate_residence_road_office_and_industry(eng, city, with_mill=False)
+    # Seed plebs so labor.step actually staffs the office (cottage
+    # gate requires office reach, which scales with assigned workers).
+    city.districts[0].pops.plebs = 10.0
     eng.step(HOURS_PER_MONTH * 3)
     assert res.tier >= 2
 
@@ -207,6 +214,10 @@ def test_distant_mill_does_not_trigger_nuisance():
     office.workers_assigned = 3
     mill = next(b for b in city.buildings if b.kind == BuildingKind.LUMBER_MILL)
     mill.completion = 1.0
+    # Seed plebs so labor.step actually staffs the office — the
+    # cottage gate requires office coverage, which is zero when the
+    # office has zero workers.
+    city.districts[0].pops.plebs = 10.0
     eng.step(HOURS_PER_MONTH * 3)
     # Residence reaches at least cottages (or further) — the distant
     # mill imposes no cap.

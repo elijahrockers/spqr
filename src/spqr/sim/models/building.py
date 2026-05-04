@@ -150,14 +150,26 @@ BUILDING_COST: dict[BuildingKind, Resources] = {
     BuildingKind.FORUM:       Resources(denarii=200, timber=30, stone=50, grain=0),
 }
 
-# Materials storage capacity (timber + stone share one pool). The total
-# city storage is the sum across all completed storage-bearing buildings;
-# excess additions are refused (in MVP, materials are only consumed not
-# produced, so the cap doesn't bite during play yet).
-STORAGE_CAPACITY: dict[BuildingKind, int] = {
-    BuildingKind.FORUM: 100,      # mayor's office stockpile
-    BuildingKind.WAREHOUSE: 250,  # general storage
-}
+# Per-warehouse total capacity, distributed across the five storable
+# goods (timber, stone, vegetables, furniture, stoneware) by the
+# player-configurable `warehouse_cap_*` fields on each Building.
+# Default is uniform — see WAREHOUSE_DEFAULT_CAP_* below. The split is
+# what gets configured; the total is fixed.
+WAREHOUSE_TOTAL_CAPACITY: int = 300
+
+# Default per-good split for a freshly-designated warehouse. Must sum
+# to WAREHOUSE_TOTAL_CAPACITY (60 × 5 = 300).
+WAREHOUSE_DEFAULT_CAP_TIMBER: int = 60
+WAREHOUSE_DEFAULT_CAP_STONE: int = 60
+WAREHOUSE_DEFAULT_CAP_VEGETABLES: int = 60
+WAREHOUSE_DEFAULT_CAP_FURNITURE: int = 60
+WAREHOUSE_DEFAULT_CAP_STONEWARE: int = 60
+
+# Forum contributes a fixed split to the city's per-material caps.
+# Forum doesn't store vegetables or finished goods — it's a civic
+# building, not a warehouse.
+FORUM_TIMBER_CAPACITY: int = 50
+FORUM_STONE_CAPACITY: int = 50
 
 
 # Crop / farm mechanics ------------------------------------------------------
@@ -200,11 +212,10 @@ FARM_GRAIN_CAPACITY: float = 1200.0
 # spatial reach, not just capacity.
 GRANARY_CAPACITY: float = 3000.0
 
-# Per-warehouse vegetables cap. Vegetables are the supplement, not the
-# staple, so a warehouse holds less than a granary. Materials storage
-# (timber + stone) is tracked separately via STORAGE_CAPACITY and shares
-# no pool with vegetables.
-WAREHOUSE_VEGETABLES_CAPACITY: float = 1000.0
+# Per-warehouse vegetables cap is now `Building.warehouse_cap_vegetables`
+# — set per warehouse, defaults to WAREHOUSE_DEFAULT_CAP_VEGETABLES.
+# The old single global constant has been replaced so a player can
+# dedicate one warehouse to food and another to materials.
 
 # Maximum hourly samples retained in `Building.inventory_history` per
 # granary. 720 = 30 game days; supports both an hourly view of the last
@@ -310,6 +321,19 @@ RESIDENCE_TIER_UPGRADE_STONE_COST: dict[int, int] = {
     2: 10,   # cottages: light masonry
     3: 25,   # insula: heavy masonry
 }
+# Furniture / stoneware are workshop output; tiers 2+ pull on them so
+# the player has a reason to stand up workshops + extra warehouses
+# before densifying. Tier 1 huts stay quick & dirty (no finished goods).
+RESIDENCE_TIER_UPGRADE_FURNITURE_COST: dict[int, int] = {
+    1: 0,
+    2: 50,    # cottages: a tenant family's furnishings
+    3: 100,   # insula: many doors, many tables
+}
+RESIDENCE_TIER_UPGRADE_STONEWARE_COST: dict[int, int] = {
+    1: 0,
+    2: 0,
+    3: 50,    # insula: amphorae, fired tile, pots
+}
 # Dijkstra reach (over the same cost model used by spatial.coverage) within
 # which a residence must find a ROAD building to qualify for tier upgrades.
 RESIDENCE_AMENITY_REACH_COST: float = 4.0
@@ -325,14 +349,30 @@ RESIDENCE_AMENITY_REACH_COST: float = 4.0
 ROAD_DESIRABILITY_RADIUS: int = 2
 ROAD_DESIRABILITY_BONUS_PER_MONTH: float = 0.02
 
-# Industrial nuisance. Residences within INDUSTRIAL_NUISANCE_RADIUS
-# (Chebyshev) of any completed quarry or lumber mill suffer two
-# effects: (a) tier capped at huts (cottages and insulae are unwilling
-# to put up with the smoke and noise), (b) a monthly satisfaction
-# penalty proportional to the fraction of district residences in the
-# nuisance zone. Mirrors the road-desirability mechanic but inverted.
-INDUSTRIAL_NUISANCE_RADIUS: int = 4
+# Industrial nuisance. Residences within the per-kind nuisance radius
+# (Chebyshev) of any completed industrial building suffer two effects:
+# (a) tier capped at huts (cottages and insulae are unwilling to put
+# up with the smoke and noise), (b) a monthly satisfaction penalty
+# proportional to the fraction of district residences in the nuisance
+# zone. Mirrors the road-desirability mechanic but inverted.
+#
+# Per-kind radii: mills + quarries carry farther than workshops because
+# they're heavier industry. Lookup goes through `nuisance_radius_for`.
+INDUSTRIAL_NUISANCE_RADIUS: int = 5      # default for mill / quarry
+WORKSHOP_NUISANCE_RADIUS: int = 3
+NUISANCE_RADIUS_BY_KIND: dict[BuildingKind, int] = {
+    BuildingKind.LUMBER_MILL: INDUSTRIAL_NUISANCE_RADIUS,
+    BuildingKind.QUARRY:      INDUSTRIAL_NUISANCE_RADIUS,
+    BuildingKind.WORKSHOP:    WORKSHOP_NUISANCE_RADIUS,
+}
 INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH: float = 0.04
+
+
+def nuisance_radius_for(kind: BuildingKind) -> int:
+    """Per-kind nuisance radius. 0 for kinds that don't emit nuisance —
+    callers can treat 0 as 'no zone' without an explicit membership
+    check."""
+    return NUISANCE_RADIUS_BY_KIND.get(kind, 0)
 
 
 # Industry — material production buildings. Lumber mills produce timber,
@@ -371,6 +411,13 @@ QUARRY_ADJACENT_TERRAINS: frozenset[CityTerrain] = frozenset(
 # Output rate is slightly less than input rate, representing waste.
 WORKSHOP_INPUT_PER_WORKER_PER_TICK: float = 0.03
 WORKSHOP_OUTPUT_PER_WORKER_PER_TICK: float = 0.02
+
+# Local on-workshop buffer for finished goods. Output lands in the
+# city treasury first (capped by warehouse furniture/stoneware caps);
+# the spillover lands in this buffer up to WORKSHOP_OUTPUT_BUFFER per
+# workshop. Production halts when both treasury and the local buffer
+# are full. Mirrors LUMBER_MILL_TIMBER_BUFFER for mills.
+WORKSHOP_OUTPUT_BUFFER: float = 50.0
 
 
 def hours_until_next_meal(tick: int, cls: int) -> int:
@@ -420,6 +467,14 @@ class Building(msgspec.Struct, frozen=False):
     # Local stone buffer on a quarry (cap QUARRY_STONE_BUFFER). Same
     # spillover-then-pay-from-it dynamic as timber_stored on the mill.
     stone_stored: float = 0.0
+    # Local furniture / stoneware buffers on a workshop. The workshop
+    # produces into the central treasury first (capped by warehouses);
+    # when the treasury cap is hit, output spills into whichever of
+    # these matches the workshop's `good`, up to WORKSHOP_OUTPUT_BUFFER.
+    # Production halts only when treasury and the local buffer are
+    # both full.
+    furniture_stored: float = 0.0
+    stoneware_stored: float = 0.0
     # House upgrade tier (0..RESIDENCE_MAX_TIER). Meaningless on other kinds.
     tier: int = 0
     # Player-set tier ceiling for RESIDENCE buildings. The housing system
@@ -440,6 +495,19 @@ class Building(msgspec.Struct, frozen=False):
     # GRANARY_HISTORY_MAX_SAMPLES; older samples are discarded as new
     # ones arrive. Used by the inspector "Info → graph" view.
     inventory_history: list[float] = msgspec.field(default_factory=list)
+    # Player-configurable per-good capacity split for a WAREHOUSE,
+    # summing to <= WAREHOUSE_TOTAL_CAPACITY. Each warehouse contributes
+    # its `warehouse_cap_*` to the corresponding city-wide cap (industry
+    # halts when the treasury reaches the per-material total). The
+    # vegetables cap is the per-warehouse vegetables limit used by
+    # grain transport — not pooled across warehouses. Meaningless on
+    # non-WAREHOUSE kinds; the defaults match the uniform-distribution
+    # starter for a new warehouse (60 × 5 = 300).
+    warehouse_cap_timber: int = 60
+    warehouse_cap_stone: int = 60
+    warehouse_cap_vegetables: int = 60
+    warehouse_cap_furniture: int = 60
+    warehouse_cap_stoneware: int = 60
 
     # --- state predicates -------------------------------------------------
 

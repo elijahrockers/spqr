@@ -103,6 +103,7 @@ def test_cottages_unlocked_with_office_in_reach():
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 100.0
+    city.treasury.furniture = 100.0  # cottages need 50 furniture
     res, _roads, office = _designate_residence_road_office(eng, city)
     # Office needs workers to have any reach. Stuff the district with
     # plebs so labor allocation gives the office its 3 slots.
@@ -139,7 +140,8 @@ def test_cottages_blocked_when_office_idle():
 
 def test_cottages_unlocked_when_office_staffed():
     """Counterpart: same setup, but with workers_assigned > 0 the
-    upgrade goes through. Confirms the gate is purely worker-driven."""
+    upgrade goes through. Confirms the gate is purely worker-driven.
+    Furniture must be in treasury too — that's the cottage tier cost."""
     from spqr.sim.systems.housing import _upgrade_residences
 
     state = new_game(seed=42, seed_starter=False)
@@ -148,6 +150,7 @@ def test_cottages_unlocked_when_office_staffed():
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 100.0
+    city.treasury.furniture = 100.0
     res, _roads, office = _designate_residence_road_office(eng, city)
     res.tier = 1
     office.workers_assigned = 3

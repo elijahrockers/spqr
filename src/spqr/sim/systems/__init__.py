@@ -13,9 +13,12 @@
     month sees the bumped capacity.
   - economy runs monthly: taxation and dole — drains the granaries via
     grain.drain_treasury_grain
-  - demographics runs last so it observes post-economy state."""
+  - demographics runs after economy so it observes post-economy state.
+  - flavor runs last (pure observer): emits stochastic mood-driven
+    log lines. Must run after every state-mutating system so the
+    weights it reads reflect the fully-settled tick."""
 
-from . import construction, economy, grain, housing, industry, labor, population
+from . import construction, economy, flavor, grain, housing, industry, labor, population
 from spqr.engine.tick import System
 
 
@@ -28,6 +31,7 @@ def default_systems() -> list[System]:
         housing.step,
         economy.step,
         population.step,
+        flavor.step,
     ]
 
 

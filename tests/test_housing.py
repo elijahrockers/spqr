@@ -53,9 +53,9 @@ def test_residence_designation_completes_immediately():
     assert res.tier == 0
 
 
-def test_undeveloped_residence_houses_three_plebs():
-    """Tier-0 residences are squatter family lots — capacity is 3 now."""
-    assert RESIDENCE_TIER_CAPACITY[0] == 3
+def test_undeveloped_residence_houses_two_plebs():
+    """Tier-0 residences are squatter family lots — capacity is 2."""
+    assert RESIDENCE_TIER_CAPACITY[0] == 2
 
 
 def test_migration_fills_residence_when_food_present():
@@ -161,16 +161,19 @@ def test_cottages_require_stone():
 
 
 def test_cottages_upgrade_when_stone_available():
-    """With timber, stone, road, AND a staffed office in reach, the
-    residence upgrades to cottages within two months. The office
-    requirement is the post-2026-05-03 cottage gate; without it the
-    residence would cap at huts."""
+    """With timber, stone, furniture, road, AND a staffed office in
+    reach, the residence upgrades to cottages within two months. The
+    office requirement is the cottage gate; furniture is the workshop-
+    fed amenity gate (tier 2 onward)."""
+    from spqr.sim.models import RESIDENCE_TIER_UPGRADE_FURNITURE_COST
+
     state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 100.0
+    city.treasury.furniture = 100.0  # cottages need 50; have headroom
     res, road = _designate_with_adjacent_road(eng, city)
     # Office two tiles east of the road, so its reach covers the
     # residence (road extends Dijkstra reach cheaply).
@@ -181,6 +184,7 @@ def test_cottages_upgrade_when_stone_available():
     office.workers_assigned = 3
     timber_before = city.treasury.timber
     stone_before = city.treasury.stone
+    furniture_before = city.treasury.furniture
     # Two months: tier 1 then tier 2.
     eng.step(HOURS_PER_MONTH * 2)
     assert res.tier == 2
@@ -192,8 +196,13 @@ def test_cottages_upgrade_when_stone_available():
         RESIDENCE_TIER_UPGRADE_STONE_COST[1]
         + RESIDENCE_TIER_UPGRADE_STONE_COST[2]
     )
+    furniture_spent = (
+        RESIDENCE_TIER_UPGRADE_FURNITURE_COST[1]
+        + RESIDENCE_TIER_UPGRADE_FURNITURE_COST[2]
+    )
     assert city.treasury.timber == timber_before - timber_spent
     assert city.treasury.stone == stone_before - stone_spent
+    assert city.treasury.furniture == furniture_before - furniture_spent
 
 
 def test_new_farm_defaults_to_wheat_with_three_worker_slots():
@@ -241,9 +250,17 @@ def test_vegetables_farm_does_not_produce_grain():
         if m == 6:
             break
         eng.step(1)
-    farm.grain_maturity = 0.0
+    farm.grain_stored = 0.0
+    grain_treasury_before = city.treasury.grain
     eng.step(HOURS_PER_MONTH)
-    assert farm.grain_maturity == 0.0
+    # The farm is sown with vegetables, so it must not contribute any
+    # grain — neither to the on-farm buffer nor (via cart) to the
+    # treasury. (Vegetables produced this month may have been drained
+    # by plebs via the eat-from-farms fallback, since the bootstrap has
+    # no warehouse and an empty granary, so we don't assert on
+    # vegetables_stored here.)
+    assert farm.grain_stored == 0.0
+    assert city.treasury.grain == grain_treasury_before
 
 
 def test_road_within_2_tiles_buffs_district_satisfaction():
@@ -407,13 +424,15 @@ def test_lowering_cap_below_tier_does_not_downgrade():
     capped at tier 1 stays as cottages.
 
     Needs a staffed office in reach so cottages are reachable in the
-    first two months."""
+    first two months, and furniture in treasury for the cottage gate."""
     state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 100.0
+    city.treasury.furniture = 200.0  # cottages need 50; insula needs 100
+    city.treasury.stoneware = 100.0  # insula needs 50
     res, road = _designate_with_adjacent_road(eng, city)
     eng.submit(PlaceZone(x=road.x + 1, y=road.y, kind=ZoneKind.OFFICE))
     eng.step(1)

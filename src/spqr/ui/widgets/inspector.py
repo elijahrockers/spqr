@@ -12,10 +12,11 @@ from textual.widget import Widget
 from spqr.engine.world import GameState
 from spqr.sim.models import (
     BUILDER_SLOTS,
+    FORUM_STONE_CAPACITY,
+    FORUM_TIMBER_CAPACITY,
     GRAIN_PER_MEAL,
     GRANARY_CAPACITY,
     GROWING_SEASON_MONTHS,
-    INDUSTRIAL_NUISANCE_RADIUS,
     LUMBER_MILL_TIMBER_BUFFER,
     LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK,
     OFFICE_REACH_PER_WORKER,
@@ -24,8 +25,7 @@ from spqr.sim.models import (
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
     MEAL_INTERVAL_HOURS,
-    STORAGE_CAPACITY,
-    WAREHOUSE_VEGETABLES_CAPACITY,
+    WAREHOUSE_TOTAL_CAPACITY,
     WORKSHOP_INPUT_PER_WORKER_PER_TICK,
     WORKSHOP_OUTPUT_PER_WORKER_PER_TICK,
     BuildingKind,
@@ -129,16 +129,61 @@ def _render_building(city: City, x: int, y: int, current_month: int, current_tic
                 )
             else:
                 text.append(f"{occupancy}/{cap} patricians\n", style=color)
-        storage = STORAGE_CAPACITY.get(b.kind, 0)
-        if storage > 0:
+        if b.kind == BuildingKind.WAREHOUSE:
             text.append("Storage:    ", style="grey70")
-            text.append(f"{storage} units\n", style="bright_cyan")
-            stored = city.stored_materials()
-            total_cap = city.total_storage_capacity()
+            text.append(
+                f"{WAREHOUSE_TOTAL_CAPACITY} units (split below)\n",
+                style="bright_cyan",
+            )
+            text.append("  timber  ", style="grey70")
+            text.append(f"{b.warehouse_cap_timber}\n", style="white")
+            text.append("  stone   ", style="grey70")
+            text.append(f"{b.warehouse_cap_stone}\n", style="white")
+            text.append("  veg     ", style="grey70")
+            text.append(f"{b.warehouse_cap_vegetables}\n", style="white")
+            text.append("  furn    ", style="grey70")
+            text.append(f"{b.warehouse_cap_furniture}\n", style="white")
+            text.append("  stwr    ", style="grey70")
+            text.append(f"{b.warehouse_cap_stoneware}\n", style="white")
+            timber_cap = city.timber_capacity()
+            stone_cap = city.stone_capacity()
+            furniture_cap = city.furniture_capacity()
+            stoneware_cap = city.stoneware_capacity()
             text.append("City stocks:\n", style="grey70")
-            text.append(f"  timber {city.treasury.timber:.0f}", style="white")
-            text.append(f"  stone {city.treasury.stone:.0f}", style="white")
-            text.append(f"   ({stored:.0f} / {total_cap})\n", style="grey50")
+            text.append(
+                f"  timber {city.treasury.timber:.0f} / {timber_cap}\n",
+                style="white",
+            )
+            text.append(
+                f"  stone  {city.treasury.stone:.0f} / {stone_cap}\n",
+                style="white",
+            )
+            text.append(
+                f"  furn   {city.treasury.furniture:.0f} / {furniture_cap}\n",
+                style="white",
+            )
+            text.append(
+                f"  stwr   {city.treasury.stoneware:.0f} / {stoneware_cap}\n",
+                style="white",
+            )
+        elif b.kind == BuildingKind.FORUM:
+            text.append("Storage:    ", style="grey70")
+            text.append(
+                f"{FORUM_TIMBER_CAPACITY}t + {FORUM_STONE_CAPACITY}s "
+                "(civic store)\n",
+                style="bright_cyan",
+            )
+            timber_cap = city.timber_capacity()
+            stone_cap = city.stone_capacity()
+            text.append("City stocks:\n", style="grey70")
+            text.append(
+                f"  timber {city.treasury.timber:.0f} / {timber_cap}\n",
+                style="white",
+            )
+            text.append(
+                f"  stone  {city.treasury.stone:.0f} / {stone_cap}\n",
+                style="white",
+            )
         if b.kind == BuildingKind.FARM:
             _render_farm_grain(text, b, current_month)
         if b.kind == BuildingKind.GRANARY:
@@ -210,12 +255,16 @@ def _render_industry(text: Text, city: City, b) -> None:  # type: ignore[no-unty
     text.append("Output:     ", style="grey70")
     text.append(f"{per_tick:.2f} {output}/hr", style="bright_yellow")
     text.append(f"  ({rate:.2f}×{b.workers_assigned})\n", style="grey50")
-    stored = city.stored_materials()
-    cap = city.total_storage_capacity()
+    if is_mill:
+        stocked = city.treasury.timber
+        cap = city.timber_capacity()
+    else:
+        stocked = city.treasury.stone
+        cap = city.stone_capacity()
     text.append("City store: ", style="grey70")
-    treasury_full = stored >= cap
+    treasury_full = stocked >= cap
     color = "yellow" if treasury_full else "white"
-    text.append(f"{stored:.0f} / {cap}\n", style=color)
+    text.append(f"{stocked:.0f} / {cap} {output}\n", style=color)
     # Local buffer line — visible only on mills/quarries. Tells the
     # player how much material is sitting on the building waiting
     # for a warehouse (or being drawn down by construction).
@@ -257,7 +306,10 @@ def _render_office(text: Text, b) -> None:  # type: ignore[no-untyped-def]
 
 def _render_workshop(text: Text, city: City, b) -> None:  # type: ignore[no-untyped-def]
     """Workshop config snapshot: which good is produced, what it
-    consumes, and the per-tick rate at the current worker count."""
+    consumes, the per-tick rate at the current worker count, and the
+    output stocks (city treasury + local on-site spillover buffer)."""
+    from spqr.sim.models import WORKSHOP_OUTPUT_BUFFER, nuisance_radius_for
+
     good = Good(b.good)
     input_name = "timber" if good == Good.FURNITURE else "stone"
     output_name = good.name.lower()
@@ -273,20 +325,52 @@ def _render_workshop(text: Text, city: City, b) -> None:  # type: ignore[no-unty
         text.append("  (no workers)\n", style="grey50")
     else:
         text.append(f"{in_rate:.2f} in / {out_rate:.2f} out per hr\n", style="bright_yellow")
-    # Treasury aggregate of the produced good.
-    stocked = (
-        city.treasury.furniture if good == Good.FURNITURE else city.treasury.stoneware
-    )
+    if good == Good.FURNITURE:
+        treasury_stock = city.treasury.furniture
+        treasury_cap = city.furniture_capacity()
+        local_stock = b.furniture_stored
+    else:
+        treasury_stock = city.treasury.stoneware
+        treasury_cap = city.stoneware_capacity()
+        local_stock = b.stoneware_stored
     text.append("City stock: ", style="grey70")
-    text.append(f"{stocked:.0f} {output_name}\n", style="white")
+    treasury_full = treasury_stock >= treasury_cap and treasury_cap > 0
+    color = "yellow" if treasury_full else "white"
+    text.append(
+        f"{treasury_stock:.0f} / {treasury_cap} {output_name}\n",
+        style=color,
+    )
+    text.append("On-site:    ", style="grey70")
+    buffer_full = local_stock >= WORKSHOP_OUTPUT_BUFFER - 1e-6
+    bcolor = (
+        "red" if treasury_full and buffer_full
+        else "yellow" if local_stock > 0
+        else "grey50"
+    )
+    text.append(
+        f"{local_stock:.0f} / {int(WORKSHOP_OUTPUT_BUFFER)} {output_name}",
+        style=bcolor,
+    )
+    if treasury_full and buffer_full:
+        text.append("  (production halted)", style="red")
+    text.append("\n")
+    radius = nuisance_radius_for(b.kind)
+    if radius > 0:
+        text.append("Nuisance:   ", style="grey70")
+        text.append(f"{radius} tile radius", style="red")
+        text.append(
+            "  (caps nearby residences at huts; press i for details)\n",
+            style="grey50",
+        )
 
 
 def _render_warehouse_veg(text: Text, b) -> None:  # type: ignore[no-untyped-def]
+    veg_cap = max(b.warehouse_cap_vegetables, 1)
     text.append("Vegetables: ", style="grey70")
-    pct = b.vegetables_stored / max(WAREHOUSE_VEGETABLES_CAPACITY, 1.0)
+    pct = b.vegetables_stored / veg_cap
     color = "green" if pct >= 0.5 else "yellow" if pct >= 0.2 else "red"
     text.append(
-        f"{b.vegetables_stored:.0f} / {int(WAREHOUSE_VEGETABLES_CAPACITY)}\n",
+        f"{b.vegetables_stored:.0f} / {int(b.warehouse_cap_vegetables)}\n",
         style=color,
     )
 
@@ -418,12 +502,18 @@ def _residence_occupancy(city: City, b) -> int:  # type: ignore[no-untyped-def]
 
 
 def _near_industrial_nuisance(city: City, b) -> bool:  # type: ignore[no-untyped-def]
-    """True if a quarry or lumber mill sits within
-    INDUSTRIAL_NUISANCE_RADIUS (Chebyshev) tiles of this residence.
-    Used to flag the inspector with a 'caps at huts' warning so the
-    player can see why a residence isn't upgrading."""
-    radius = INDUSTRIAL_NUISANCE_RADIUS
-    for kind in (BuildingKind.LUMBER_MILL, BuildingKind.QUARRY):
+    """True if a quarry, lumber mill, or workshop sits within its
+    per-kind nuisance radius (Chebyshev) of this residence. Used to
+    flag the inspector with a 'caps at huts' warning so the player
+    can see why a residence isn't upgrading."""
+    from spqr.sim.models import nuisance_radius_for
+
+    for kind in (
+        BuildingKind.LUMBER_MILL, BuildingKind.QUARRY, BuildingKind.WORKSHOP,
+    ):
+        radius = nuisance_radius_for(kind)
+        if radius <= 0:
+            continue
         for src in city.completed_of(kind):
             if abs(src.x - b.x) <= radius and abs(src.y - b.y) <= radius:
                 return True
