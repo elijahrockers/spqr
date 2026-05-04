@@ -4,10 +4,6 @@ Text/terminal city sim, Dwarf Fortress × SimCity, ancient-Roman themed.
 The MVP is "engine first": deterministic tick loop, procgen world,
 hybrid agent/aggregate population, Textual TUI.
 
-**Read `@JOURNAL.md` first** — it tracks decisions, what worked, what
-broke, and known gotchas. Append a new dated entry at the top after any
-substantive change.
-
 ## Stack
 - Python 3.12+, `textual` (TUI), `msgspec` (state + msgpack save/load),
   `numpy` (procgen + aggregate math), `pytest`.
@@ -79,6 +75,113 @@ substantive change.
   `tick > 0`). Systems with monthly or weekly cadence (housing,
   economy, population) call these instead of reinventing the modulo
   math, so the tick-0 skip stays consistent everywhere.
+- **Removal is tombstone-based.** `_tombstone_building` clears the
+  footprint tiles, drops the entry from `district.building_ids`, and
+  sets `b.kind = BuildingKind.EMPTY`. The building stays in
+  `city.buildings` so existing `tile.building_id` values remain
+  stable. Iterators that filter by kind (e.g. `completed_of`,
+  inspector renders, `_full_residence_ids`) naturally skip EMPTY.
+  New systems that walk `city.buildings` should also filter by kind
+  to avoid touching tombstones. Removal happens through two tools:
+  UNDESIGNATE (free, only under-construction, 100% refund) and
+  BULLDOZE (`BULLDOZE_DENARII_COST = 10` per building, refunds
+  `BULLDOZE_REFUND_FRACTION = 0.5` of timber+stone, denarii are
+  sunk). Multi-tile (office) buildings remove as one unit.
+- **Industrial nuisance** caps residences. Quarries and lumber mills
+  emit nuisance within `INDUSTRIAL_NUISANCE_RADIUS = 4` (Chebyshev).
+  Residences in that zone (a) cap at huts (tier 1), regardless of
+  office reach or materials, and (b) drag district satisfaction down
+  by `INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH × fraction-of-residences-
+  in-zone` each month. The kind set lives in
+  `housing.INDUSTRIAL_NUISANCE_KINDS`; add new dirty production kinds
+  there. Idle (zero-worker) industrial buildings still emit nuisance —
+  the gate is on `is_completed`, not on `workers_assigned`.
+- **OFFICE is a 2×2 building.** Placement requires all four tiles
+  in the footprint anchored at (x1, y1) to be buildable; the engine
+  clamps any wider PlaceZoneRect to 2×2 for OFFICE. Cost is paid
+  once, not four times. All four tile.building_ids point to the same
+  office struct, so the inspector resolves to that struct from any
+  corner — no special "find the anchor" code path. The UI shows a
+  green/red 2×2 footprint preview at the cursor when the OFFICE tool
+  is active. New multi-tile buildings should follow the same pattern
+  (shared building_id) rather than introducing per-tile shells.
+- **Workshops are crop-mirror configurable.** `Building.good`
+  parallels `Building.crop` — value is a `Good` IntEnum
+  (FURNITURE=0, STONEWARE=1). Furniture consumes timber, stoneware
+  consumes stone, both produce into the treasury aggregate
+  (`treasury.furniture` / `treasury.stoneware`). Industry system
+  halts a workshop when input is insufficient — no partial yields.
+- **Cottages gate on office reach.** Tier 2 (cottages) only upgrades
+  if a completed `BuildingKind.OFFICE` has the residence in its
+  Dijkstra coverage. Reach is `OFFICE_REACH_PER_WORKER ×
+  workers_assigned`, computed via `spatial.coverage` — same primitive
+  as granaries and warehouses. An office with 0 workers covers
+  nothing (idle administrative shell). Tier 1 (huts) has no office
+  gate; tier 3 (insula) keeps just the existing material+road gates
+  since cottages already required the office.
+- **Taxation is office-gated.** Plebs and patricians whose residence
+  is outside the union of all office coverages contribute zero tax.
+  The grain dole still applies to every pleb (it's a satisfaction
+  expense, not a range gate). `economy._office_taxable_pops` mirrors
+  `_residence_occupancy`'s pro-rating math so the inspector and the
+  tax base never drift.
+- **Labor is bucket-prioritized.** `labor.step` groups every
+  building into one of six `LaborCategory` buckets via
+  `labor_category_for(b)` — Construction (any under-construction),
+  Farms, Lumber mills, Quarries, Workshops, Offices — then drains
+  the per-district worker pool in `city.labor_priority` order.
+  Within a bucket, placement order (`district.building_ids`)
+  decides ties. Buildings without a bucket (residences, granaries,
+  warehouses, roads, civic) always land at `workers_assigned == 0`.
+  The priority list is mutated through `SetLaborPriority` (must be
+  a permutation of LaborCategory ints 0..5; invalid input is
+  silently dropped) — same convention as `SetTaxRate` /
+  `SetGrainDole`. Default order:
+  `[CONSTRUCTION, FARMS, LUMBER_MILLS, QUARRIES, WORKSHOPS, OFFICES]`.
+- **Eat-from-farms fallback.** When a residence's meal can't be
+  satisfied by in-reach granaries / warehouses (after the cross-fill
+  topup), `grain._drain_for_house` falls through to draining
+  in-reach farms directly — wheat farms feed grain, vegetable farms
+  feed vegetables. Farms reach houses under `FARM_TRANSPORT_REACH_COST`
+  (the same Dijkstra cap they ship to granaries under, so reach is
+  symmetric). Crucially, farm buffers stay out of `treasury.grain` /
+  `treasury.vegetables` — those mirror granary / warehouse
+  inventories only, and the dole + tax base read the cached
+  aggregates. A farm-fed meal must not move the treasury.
+  `drain_treasury_grain` (the dole drain) follows the same shape:
+  granaries first, then wheat farms, with the treasury sync at the
+  end still summing granaries only.
+- **Mill / quarry local buffers.** Lumber mills hold up to
+  `LUMBER_MILL_TIMBER_BUFFER` timber on the building itself
+  (`b.timber_stored`); quarries hold `QUARRY_STONE_BUFFER` stone
+  (`b.stone_stored`). Industry production lands in the city
+  treasury first (capped by `total_storage_capacity` from forum +
+  warehouses); when the treasury is full, output spills into the
+  producing building's local buffer. Both pools halt production
+  only when treasury *and* the local buffer are full.
+  Construction goes through `City.can_afford` / `City.pay_cost`,
+  which combine the treasury and every operational mill / quarry
+  buffer — paying timber drains treasury first, then mills oldest
+  first; same for stone with quarries. Treasury sync (`treasury.timber`
+  / `treasury.stone`) tracks the central pool only, so the cap
+  check stays honest. Bulldozing a mill / quarry forfeits the
+  local buffer (matches farms losing `grain_stored` on bulldoze).
+- **Mill / quarry adjacency.** Lumber mills only place on tiles
+  with at least one orthogonally-adjacent `CityTerrain.FOREST`;
+  quarries need adjacent `HILL` or `ROCK`. Enforced by
+  `City.has_required_adjacency(kind, x, y)` in `_place_zone_rect`.
+  Procgen-seeded buildings bypass the engine path and aren't
+  subject to the rule (the starter block still ships with mill /
+  quarry on grass). Adjacency is checked at placement time only —
+  if the adjacent forest is later bulldozed, the mill keeps
+  producing on the now-empty land, same as a real-world land-use
+  grandfather clause.
+- **Escape clears the build tool last.** `app.action_cancel`
+  cascades drag → range highlight → tool. Pressing escape with no
+  drag and no highlight active drops the active brush
+  (`_zone_tool`) back to None — Vim-style reset. Selecting a tool
+  via the build menu sets the brush; the only ways to clear it are
+  picking another tool or escape with a clean slate.
 - **Two food pipelines, mirrored.** Grain: wheat farms →
   `grain_stored` → granaries → `treasury.grain`. Vegetables: veg farms
   → `vegetables_stored` → warehouses → `treasury.vegetables`. Both use
@@ -101,10 +204,21 @@ substantive change.
   cursor. (i) opens `InfoScreen` — read-only detail, including the
   per-source granary/warehouse listing for residences and the inventory
   graph hotkey for granaries. (c) opens `ConfigScreen` — mutates state
-  via commands. Today only farms have anything to configure (crop
-  selection); switching crops past `CROP_SWITCH_CONFIRM_THRESHOLD = 0.30`
-  maturity prompts y/n confirmation since the standing growth is
-  discarded.
+  via commands. Farms configure crop (switching past
+  `CROP_SWITCH_CONFIRM_THRESHOLD = 0.30` maturity prompts y/n
+  confirmation since standing growth is discarded). Residences
+  configure `tier_cap`: the housing system stops upgrading once
+  `tier == tier_cap`, freezing a plot at undeveloped/huts/cottages
+  even when materials and roads would advance it further. Default
+  `tier_cap = RESIDENCE_MAX_TIER` means uncapped. Lowering the cap
+  below the current tier never downgrades; it only blocks further
+  upgrades.
+- **Rich markup must go through `style=` or `Text.from_markup`.** Never
+  `text.append("[dim]…[/]")` — `Text.append` treats brackets as
+  literal characters, so the markup leaks to the player verbatim.
+  Either pass `style="dim"` as a kwarg or split into separate appends
+  with their own styles. The `_assert_no_markup_leaks` helper in
+  `test_config_screen.py` pins this for the config dialogs.
 - **`msgspec.Struct` typed fields**: construct with the declared type.
   An `int` passed to a `float` field will silently round-trip-coerce and
   break encode-byte-stability (see JOURNAL 2026-04-25).

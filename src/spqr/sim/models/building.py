@@ -5,6 +5,7 @@ import enum
 import msgspec
 
 from .resources import Resources
+from .tile import CityTerrain
 
 
 class BuildingKind(enum.IntEnum):
@@ -37,6 +38,45 @@ class Good(enum.IntEnum):
     domus demand for furniture, civic projects for stoneware)."""
     FURNITURE = 0
     STONEWARE = 1
+
+
+class LaborCategory(enum.IntEnum):
+    """Worker-allocation buckets for the per-city labor priority list.
+    Construction is a state, not a kind — any building under
+    construction lands in CONSTRUCTION regardless of its eventual
+    kind. The other categories map 1:1 to BuildingKind values that
+    take operational workers. Storage / civic / housing kinds have no
+    bucket; `labor_category_for` returns None for them."""
+    CONSTRUCTION = 0
+    FARMS        = 1
+    LUMBER_MILLS = 2
+    QUARRIES     = 3
+    WORKSHOPS    = 4
+    OFFICES      = 5
+
+
+# Default priority order — Construction first (so new buildings finish
+# instead of stalling), then food production, raw materials, finished
+# goods, and finally civic admin. Stored as ints (not the enum) on
+# `City.labor_priority` to match the encode-byte stability rule that
+# `Building.crop` / `Building.good` already follow.
+DEFAULT_LABOR_PRIORITY: list[int] = [
+    int(LaborCategory.CONSTRUCTION),
+    int(LaborCategory.FARMS),
+    int(LaborCategory.LUMBER_MILLS),
+    int(LaborCategory.QUARRIES),
+    int(LaborCategory.WORKSHOPS),
+    int(LaborCategory.OFFICES),
+]
+
+
+_KIND_TO_LABOR_CATEGORY: dict[BuildingKind, LaborCategory] = {
+    BuildingKind.FARM:        LaborCategory.FARMS,
+    BuildingKind.LUMBER_MILL: LaborCategory.LUMBER_MILLS,
+    BuildingKind.QUARRY:      LaborCategory.QUARRIES,
+    BuildingKind.WORKSHOP:    LaborCategory.WORKSHOPS,
+    BuildingKind.OFFICE:      LaborCategory.OFFICES,
+}
 
 
 # Capacity in housing units (people housed) by building kind. RESIDENCE is
@@ -97,7 +137,7 @@ BUILD_HOURS: dict[BuildingKind, int] = {
 # as the treasury affords.
 BUILDING_COST: dict[BuildingKind, Resources] = {
     BuildingKind.ROAD:        Resources(denarii=5,   timber=0,  stone=2,  grain=0),
-    BuildingKind.FARM:        Resources(denarii=20,  timber=10, stone=0,  grain=0),
+    BuildingKind.FARM:        Resources(denarii=20,  timber=0, stone=0,  grain=0),
     BuildingKind.GRANARY:     Resources(denarii=40,  timber=15, stone=10, grain=0),
     BuildingKind.RESIDENCE:   Resources(denarii=50,  timber=0,  stone=0,  grain=0),
     BuildingKind.WORKSHOP:    Resources(denarii=60,  timber=15, stone=10, grain=0),
@@ -142,7 +182,7 @@ CROP_WORKER_HOURS_PER_HARVEST: dict[int, int] = {
     int(Crop.VEGETABLES): 480,    # 3 workers × 160 ≈ 1 harvest/week
 }
 CROP_YIELD_PER_HARVEST: dict[int, float] = {
-    int(Crop.WHEAT): 150.0,
+    int(Crop.WHEAT): 100.0,
     int(Crop.VEGETABLES): 80.0,
 }
 
@@ -213,23 +253,26 @@ BULLDOZE_REFUND_FRACTION: float = 0.5
 # class C eats when `(tick - MEAL_OFFSET_HOURS[C]) % MEAL_INTERVAL_HOURS[C]
 # == 0`. Per-meal grain is calibrated so the daily total per individual
 # matches the original continuous hourly rates (plebs 0.020/h,
-# patricians 0.050/h).
+# patricians 0.050/h). All classes eat once a day at 6am — keeps the
+# simulation legible (one meal "tick" per day across the city) without
+# changing per-class consumption volumes.
 
 # Indexes match PopClass IntEnum values (PLEB=0, PATRICIAN=1).
 MEAL_INTERVAL_HOURS: dict[int, int] = {
     0: 24,   # PLEB: once a day
-    1: 12,   # PATRICIAN: twice a day
+    1: 24,   # PATRICIAN: once a day
 }
 
-# Offset within the period — staggers the daily rhythm.
+# Offset within the period — staggers the daily rhythm. Both classes
+# share 6am so granary inventories drop in single, easy-to-read steps.
 MEAL_OFFSET_HOURS: dict[int, int] = {
-    0: 6,    # plebs 6am daily
-    1: 9,    # patricians 9am, 9pm
+    0: 6,
+    1: 6,
 }
 
 GRAIN_PER_MEAL: dict[int, float] = {
     0: 0.48,  # pleb: 0.48 every 24h = 0.020/h
-    1: 0.60,  # patrician: 0.60 every 12h = 0.050/h
+    1: 1.20,  # patrician: 1.20 every 24h = 0.050/h
 }
 
 # Each civilian class is housed in exactly one BuildingKind.
@@ -246,10 +289,10 @@ CLASS_HOUSING: dict[int, "BuildingKind"] = {
 # demand stone alongside timber.
 RESIDENCE_MAX_TIER: int = 3
 RESIDENCE_TIER_CAPACITY: dict[int, int] = {
-    0: 3,    # undeveloped land — squatter family
-    1: 6,    # huts (timber)
-    2: 15,   # cottages (timber + stone)
-    3: 40,   # insula — multi-story tenement (timber + stone)
+    0: 2,    # undeveloped land — squatter family
+    1: 4,    # huts (timber)
+    2: 8,   # cottages (timber + stone)
+    3: 16,   # insula — multi-story tenement (timber + stone)
 }
 RESIDENCE_TIER_NAME: dict[int, str] = {
     0: "undeveloped",
@@ -258,7 +301,7 @@ RESIDENCE_TIER_NAME: dict[int, str] = {
     3: "insula",
 }
 RESIDENCE_TIER_UPGRADE_TIMBER_COST: dict[int, int] = {
-    1: 5,    # huts go up cheaply
+    1: 10,    # huts go up cheaply
     2: 20,   # cottages
     3: 50,   # insula
 }
@@ -293,12 +336,33 @@ INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH: float = 0.04
 
 
 # Industry — material production buildings. Lumber mills produce timber,
-# quarries produce stone. Both halt when total city materials
-# (treasury.timber + treasury.stone) hit total_storage_capacity, which
-# scales with forum + warehouse count: this is what the user's
-# "yields are stored in warehouse" rule means in practice.
+# quarries produce stone. Production lands first in the city treasury
+# (capped by total_storage_capacity from forum + warehouses); when the
+# treasury is full, output spills into the producing building's local
+# buffer up to LUMBER_MILL_TIMBER_BUFFER / QUARRY_STONE_BUFFER. The
+# buffer keeps an early-game city building when no warehouse exists
+# yet — construction can still pay from it via City.pay_cost. Both
+# pools halt production once the treasury and the local buffer are
+# full.
 LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK: float = 0.05
 QUARRY_STONE_PER_WORKER_PER_TICK: float = 0.04
+LUMBER_MILL_TIMBER_BUFFER: float = 50.0
+QUARRY_STONE_BUFFER: float = 50.0
+
+
+# Adjacency rules for resource-extraction buildings. A lumber mill
+# only goes up next to forest (workers fell trees on adjacent tiles);
+# a quarry only goes up next to a hill or rock face. Adjacency is
+# 4-directional (Manhattan radius 1) — diagonal-only contact would
+# stretch the visual link. Checked at placement time only; if the
+# adjacent forest is later cut down, the mill keeps producing on
+# pretend-forest, same as a real-world land-use grandfather clause.
+LUMBER_MILL_ADJACENT_TERRAINS: frozenset[CityTerrain] = frozenset(
+    {CityTerrain.FOREST}
+)
+QUARRY_ADJACENT_TERRAINS: frozenset[CityTerrain] = frozenset(
+    {CityTerrain.HILL, CityTerrain.ROCK}
+)
 
 # Workshop tuning. Each worker tick consumes INPUT of the goods'
 # raw material (timber for furniture, stone for stoneware) from the
@@ -316,6 +380,18 @@ def hours_until_next_meal(tick: int, cls: int) -> int:
     offset = MEAL_OFFSET_HOURS[cls]
     elapsed = (tick - offset) % interval
     return 0 if elapsed == 0 else interval - elapsed
+
+
+def labor_category_for(b: "Building") -> LaborCategory | None:
+    """Bucket a building belongs to for labor priority allocation.
+    Construction wins over kind: an under-construction quarry sits in
+    CONSTRUCTION, not QUARRIES. Returns None for kinds that take no
+    workers (residences, granaries, warehouses, roads, forum, temple,
+    domus) so the caller knows to zero `workers_assigned` without
+    spending pool capacity."""
+    if b.is_under_construction:
+        return LaborCategory.CONSTRUCTION
+    return _KIND_TO_LABOR_CATEGORY.get(b.kind)
 
 
 class Building(msgspec.Struct, frozen=False):
@@ -336,6 +412,14 @@ class Building(msgspec.Struct, frozen=False):
     # Vegetables physically held: harvest sitting on a vegetables farm
     # awaiting pickup, or stockpile in a warehouse.
     vegetables_stored: float = 0.0
+    # Local timber buffer on a lumber mill (cap LUMBER_MILL_TIMBER_BUFFER).
+    # Industry production spills here when the city treasury is at the
+    # storage cap; construction can pay from it via City.pay_cost.
+    # Meaningless on other building kinds.
+    timber_stored: float = 0.0
+    # Local stone buffer on a quarry (cap QUARRY_STONE_BUFFER). Same
+    # spillover-then-pay-from-it dynamic as timber_stored on the mill.
+    stone_stored: float = 0.0
     # House upgrade tier (0..RESIDENCE_MAX_TIER). Meaningless on other kinds.
     tier: int = 0
     # Player-set tier ceiling for RESIDENCE buildings. The housing system

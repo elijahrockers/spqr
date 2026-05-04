@@ -28,9 +28,13 @@ def test_generated_world_has_player_city():
 
 
 def test_default_seed_drops_starter_block():
-    """The production default is to seed a compact starter layout: 6
-    farms, 3 residences, 1 granary, 1 warehouse, 1 lumber mill, plus
-    6 road tiles connecting them."""
+    """The production default is to seed an 11×3 starter layout: 6
+    farms, 3 residences, 1 granary, 1 warehouse, 1 lumber mill, 1
+    quarry, plus 11 road tiles connecting them. The mill and quarry
+    sit at the far right so residences are outside the industrial-
+    nuisance radius."""
+    from spqr.sim.models import INDUSTRIAL_NUISANCE_RADIUS
+
     state = new_game(seed=42)
     city = state.player_city()
     counts = Counter(b.kind for b in city.buildings)
@@ -39,16 +43,31 @@ def test_default_seed_drops_starter_block():
     assert counts[BuildingKind.GRANARY] == 1
     assert counts[BuildingKind.WAREHOUSE] == 1
     assert counts[BuildingKind.LUMBER_MILL] == 1
-    assert counts[BuildingKind.ROAD] == 6
-    # All seeded buildings start operational so the player can use them
-    # immediately.
+    assert counts[BuildingKind.QUARRY] == 1
+    assert counts[BuildingKind.ROAD] == 11
+    # All seeded buildings start operational.
     for b in city.buildings:
         assert b.completion >= 1.0
-    # Layout is compact: every seeded building sits within a 6×3 area.
+    # Layout sits within an 11×3 area.
     xs = [b.x for b in city.buildings]
     ys = [b.y for b in city.buildings]
-    assert max(xs) - min(xs) <= 5
+    assert max(xs) - min(xs) <= 10
     assert max(ys) - min(ys) <= 2
+    # Crucial: every seeded residence is OUTSIDE Chebyshev distance
+    # INDUSTRIAL_NUISANCE_RADIUS of every industrial building. Without
+    # this gap the seeded residences would cap at huts on day one.
+    residences = [b for b in city.buildings if b.kind == BuildingKind.RESIDENCE]
+    industry = [
+        b for b in city.buildings
+        if b.kind in (BuildingKind.LUMBER_MILL, BuildingKind.QUARRY)
+    ]
+    for r in residences:
+        for ind in industry:
+            chebyshev = max(abs(r.x - ind.x), abs(r.y - ind.y))
+            assert chebyshev > INDUSTRIAL_NUISANCE_RADIUS, (
+                f"residence ({r.x},{r.y}) is in {ind.kind.name} "
+                f"nuisance range (cheby={chebyshev})"
+            )
 
 
 def test_seed_starter_false_leaves_blank_map():

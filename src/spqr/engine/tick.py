@@ -10,6 +10,7 @@ from spqr.engine.commands import (
     PlaceZoneRect,
     SetFarmCrop,
     SetGrainDole,
+    SetLaborPriority,
     SetResidenceTierCap,
     SetSpeed,
     SetTaxRate,
@@ -112,6 +113,8 @@ class Engine:
                 self._set_residence_tier_cap(building_id, tier_cap)
             case SetWorkshopGood(building_id, good):
                 self._set_workshop_good(building_id, good)
+            case SetLaborPriority(priority):
+                self._set_labor_priority(priority)
 
     def _set_residence_tier_cap(self, building_id: int, tier_cap: int) -> None:
         from spqr.sim.models import RESIDENCE_MAX_TIER, RESIDENCE_TIER_NAME
@@ -133,6 +136,21 @@ class Engine:
             LogSeverity.INFO,
             f"Residence at ({b.x},{b.y}) capped at {cap_name}.",
         )
+
+    def _set_labor_priority(self, priority: list[int]) -> None:
+        """Validate then assign a new labor priority list. Silently
+        ignored if `priority` isn't a permutation of [0..5] — drift
+        in the saved priority would make labor allocation skip
+        whichever bucket got dropped, so we'd rather keep the old
+        order than apply garbage."""
+        from spqr.sim.models import LaborCategory
+
+        expected = sorted(int(c) for c in LaborCategory)
+        if not isinstance(priority, list):
+            return
+        if sorted(priority) != expected:
+            return
+        self.state.player_city().labor_priority = list(priority)
 
     def _set_workshop_good(self, building_id: int, good: int) -> None:
         from spqr.sim.models import Good
@@ -202,14 +220,18 @@ class Engine:
         district = city.districts[0] if city.districts else None
         placed = 0
         unaffordable = 0
+        wrong_adjacency = 0
         for y in range(y_lo, y_hi + 1):
             for x in range(x_lo, x_hi + 1):
                 if not city.is_buildable(x, y):
                     continue
-                if not city.treasury.can_pay(cost):
+                if not city.has_required_adjacency(b_kind, x, y):
+                    wrong_adjacency += 1
+                    continue
+                if not city.can_afford(cost):
                     unaffordable += 1
                     continue
-                city.treasury.pay(cost)
+                city.pay_cost(cost)
                 # RESIDENCE designations skip construction: tier-0 plots
                 # are undeveloped land that admits migrants immediately.
                 # Higher tiers are earned by the housing system as
@@ -228,16 +250,24 @@ class Engine:
                 if district is not None:
                     district.building_ids.append(building.id)
                 placed += 1
-        if placed == 0 and unaffordable == 0:
+        if placed == 0 and unaffordable == 0 and wrong_adjacency == 0:
             return
         if placed == 0:
-            push_log(
-                self.state.log,
-                self.state.tick,
-                LogSeverity.WARNING,
-                f"Cannot afford {b_kind.name.lower()}: need "
-                f"{int(cost.denarii)}d {int(cost.timber)}t {int(cost.stone)}s.",
-            )
+            if wrong_adjacency > 0 and unaffordable == 0:
+                push_log(
+                    self.state.log,
+                    self.state.tick,
+                    LogSeverity.WARNING,
+                    _adjacency_warning(b_kind),
+                )
+            else:
+                push_log(
+                    self.state.log,
+                    self.state.tick,
+                    LogSeverity.WARNING,
+                    f"Cannot afford {b_kind.name.lower()}: need "
+                    f"{int(cost.denarii)}d {int(cost.timber)}t {int(cost.stone)}s.",
+                )
             return
         if x_lo == x_hi and y_lo == y_hi:
             push_log(
@@ -247,9 +277,15 @@ class Engine:
                 f"Designated {b_kind.name.lower()} at ({x_lo},{y_lo}).",
             )
         else:
-            tail = (
-                f" ({unaffordable} skipped: treasury empty)" if unaffordable else ""
-            )
+            extras: list[str] = []
+            if unaffordable:
+                extras.append(f"{unaffordable} skipped: treasury empty")
+            if wrong_adjacency:
+                extras.append(
+                    f"{wrong_adjacency} skipped: needs adjacent "
+                    f"{_adjacency_terrain_name(b_kind)}"
+                )
+            tail = f" ({'; '.join(extras)})" if extras else ""
             push_log(
                 self.state.log,
                 self.state.tick,
@@ -282,7 +318,7 @@ class Engine:
                     f"Cannot place office at ({x},{y}): footprint blocked.",
                 )
                 return
-        if not city.treasury.can_pay(cost):
+        if not city.can_afford(cost):
             push_log(
                 self.state.log,
                 self.state.tick,
@@ -291,7 +327,7 @@ class Engine:
                 f"{int(cost.denarii)}d {int(cost.timber)}t {int(cost.stone)}s.",
             )
             return
-        city.treasury.pay(cost)
+        city.pay_cost(cost)
         building = Building(
             id=city.next_building_id,
             kind=BuildingKind.OFFICE,
@@ -454,3 +490,18 @@ def _building_footprint(b: Building) -> list[tuple[int, int]]:
             for dx in range(OFFICE_FOOTPRINT_W)
         ]
     return [(b.x, b.y)]
+
+
+def _adjacency_terrain_name(kind: BuildingKind) -> str:
+    if kind == BuildingKind.LUMBER_MILL:
+        return "forest"
+    if kind == BuildingKind.QUARRY:
+        return "hill or rock"
+    return "natural feature"
+
+
+def _adjacency_warning(kind: BuildingKind) -> str:
+    return (
+        f"Cannot place {kind.name.lower()}: must sit next to "
+        f"{_adjacency_terrain_name(kind)}."
+    )

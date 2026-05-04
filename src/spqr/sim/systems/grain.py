@@ -64,9 +64,10 @@ def step(state: GameState, rng: random.Random) -> None:
     for city in state.cities:
         granary_cov = _granary_coverages(city)
         warehouse_cov = _warehouse_coverages(city)
+        farm_cov = _farm_coverages(city)
         _grow_and_harvest(state, city, in_season)
         _transport(state, city, granary_cov, warehouse_cov)
-        _consume(state, city, granary_cov, warehouse_cov)
+        _consume(state, city, granary_cov, warehouse_cov, farm_cov)
         _sync_treasury_grain(city)
         _sync_treasury_vegetables(city)
         _record_granary_history(city)
@@ -100,6 +101,18 @@ def _warehouse_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
     return {
         b.id: coverage(city, b.x, b.y, GRANARY_REACH_COST)
         for b in city.completed_of(BuildingKind.WAREHOUSE)
+    }
+
+
+def _farm_coverages(city: City) -> dict[int, dict[tuple[int, int], float]]:
+    """Per-farm coverage map. Used by the eat-from-farms fallback when
+    a residence's granaries and warehouses can't cover the meal. The
+    cost cap is FARM_TRANSPORT_REACH_COST — symmetric with how farms
+    ship to granaries today, so 'farms can reach this house' and
+    'this house can reach a farm' agree by construction."""
+    return {
+        b.id: coverage(city, b.x, b.y, FARM_TRANSPORT_REACH_COST)
+        for b in city.completed_of(BuildingKind.FARM)
     }
 
 
@@ -209,6 +222,7 @@ def _consume(
     city: City,
     granary_cov: dict[int, dict[tuple[int, int], float]],
     warehouse_cov: dict[int, dict[tuple[int, int], float]],
+    farm_cov: dict[int, dict[tuple[int, int], float]],
 ) -> None:
     """Discrete meal events. Each civilian class fires only on its scheduled
     tick (see MEAL_INTERVAL_HOURS / MEAL_OFFSET_HOURS). Outside of meal
@@ -237,8 +251,8 @@ def _consume(
             ]
             allow_veg = cls == PopClass.PLEB
             unmet, food_types = _serve_meal(
-                city, houses, granary_cov, warehouse_cov, demand,
-                allow_veg=allow_veg,
+                city, houses, granary_cov, warehouse_cov, farm_cov,
+                demand, allow_veg=allow_veg,
             )
             _apply_meal_satisfaction(d, demand, unmet, food_types)
 
@@ -248,6 +262,7 @@ def _serve_meal(
     houses: list,  # type: ignore[type-arg]
     granary_cov: dict[int, dict[tuple[int, int], float]],
     warehouse_cov: dict[int, dict[tuple[int, int], float]],
+    farm_cov: dict[int, dict[tuple[int, int], float]],
     demand: float,
     *,
     allow_veg: bool,
@@ -271,7 +286,7 @@ def _serve_meal(
         share = h.residence_capacity() / total_cap
         house_demand = demand * share
         drained, g_used, v_used = _drain_for_house(
-            city, h, granary_cov, warehouse_cov, house_demand,
+            city, h, granary_cov, warehouse_cov, farm_cov, house_demand,
             allow_veg=allow_veg,
         )
         unmet += house_demand - drained
@@ -300,16 +315,25 @@ def _drain_for_house(
     house,  # type: ignore[no-untyped-def]
     granary_cov: dict[int, dict[tuple[int, int], float]],
     warehouse_cov: dict[int, dict[tuple[int, int], float]],
+    farm_cov: dict[int, dict[tuple[int, int], float]],
     demand: float,
     *,
     allow_veg: bool,
 ) -> tuple[float, bool, bool]:
     """Pull `demand` worth of food from in-reach sources for one house.
 
-    When both grain (granary) and vegetables (warehouse) are accessible
-    and have stock, demand splits 50/50. If only one source has stock,
-    that source carries the full demand. Returns
-    `(amount_drained, grain_used, veg_used)`."""
+    Three passes, in order:
+      1. granaries (grain) and warehouses (vegetables) — split 50/50
+         when both have stock, otherwise the available one carries the
+         full demand.
+      2. cross-fill — if one bucket under-delivered, the other tops up.
+      3. farms — if any shortfall remains, drain wheat/vegetable farms
+         in reach directly. Lets a residence next to a working farm eat
+         even before the storage layer is built out, and keeps people
+         fed when granaries / warehouses run dry but the fields are
+         still producing.
+
+    Returns `(amount_drained, grain_used, veg_used)`."""
     if demand <= 0:
         return 0.0, False, False
     grain_available = _has_stock_in_reach(
@@ -329,16 +353,18 @@ def _drain_for_house(
     elif veg_available:
         grain_target, veg_target = 0.0, demand
     else:
-        return 0.0, False, False
+        grain_target, veg_target = 0.0, 0.0
     grain_drained = _drain_from(
         city, house, granary_cov, "grain_stored", grain_target,
-    )
+    ) if grain_target > 0 else 0.0
     veg_drained = _drain_from(
         city, house, warehouse_cov, "vegetables_stored", veg_target,
-    )
+    ) if veg_target > 0 else 0.0
     # If one source under-delivered (ran out mid-meal), top up from
     # whatever's left in the other.
-    shortfall = (grain_target - grain_drained) + (veg_target - veg_drained)
+    shortfall = (
+        (grain_target - grain_drained) + (veg_target - veg_drained)
+    )
     if shortfall > 0:
         if veg_target == 0 or grain_drained < grain_target:
             extra_v = _drain_from(
@@ -351,6 +377,24 @@ def _drain_for_house(
                 city, house, granary_cov, "grain_stored", shortfall,
             )
             grain_drained += extra_g
+            shortfall -= extra_g
+    # Total demand still unmet after granaries + warehouses + cross-fill.
+    # Pull from farms in reach directly. Wheat farms feed grain;
+    # vegetable farms feed vegetables (only for classes that eat veg).
+    remaining = demand - (grain_drained + veg_drained)
+    if remaining > 1e-9:
+        extra_g = _drain_from_farms(
+            city, house, farm_cov, int(Crop.WHEAT),
+            "grain_stored", remaining,
+        )
+        grain_drained += extra_g
+        remaining -= extra_g
+    if allow_veg and remaining > 1e-9:
+        extra_v = _drain_from_farms(
+            city, house, farm_cov, int(Crop.VEGETABLES),
+            "vegetables_stored", remaining,
+        )
+        veg_drained += extra_v
     total = grain_drained + veg_drained
     return total, grain_drained > 0, veg_drained > 0
 
@@ -397,6 +441,44 @@ def _drain_from(
     return drained
 
 
+def _drain_from_farms(
+    city: City,
+    house,  # type: ignore[no-untyped-def]
+    farm_cov: dict[int, dict[tuple[int, int], float]],
+    crop: int,
+    stock_attr: str,
+    demand: float,
+) -> float:
+    """Pull `demand` from in-reach farms growing `crop`. Mirrors
+    `_drain_from` but iterates farms (not granaries / warehouses) and
+    filters by crop. Used as the third-pass fallback when the storage
+    layer can't satisfy a meal. Returns amount actually drained.
+
+    Note: farms intentionally stay out of `treasury.grain` /
+    `treasury.vegetables`, which mirror only granary / warehouse
+    inventories. Draining a farm here doesn't bypass the treasury
+    contract — the dole and tax base read the cached aggregates and
+    don't see the farm buffer."""
+    if demand <= 0:
+        return 0.0
+    drained = 0.0
+    for b_id in sorted(farm_cov.keys()):
+        b = city.buildings[b_id]
+        if b.crop != crop:
+            continue
+        if (house.x, house.y) not in farm_cov[b_id]:
+            continue
+        stock = getattr(b, stock_attr)
+        take = min(demand - drained, stock)
+        if take <= 0:
+            continue
+        setattr(b, stock_attr, stock - take)
+        drained += take
+        if drained >= demand:
+            break
+    return drained
+
+
 def _drain_any_granary(city: City, demand: float) -> float:
     """Fallback: pull from any granary, largest first. Returns unmet."""
     granaries = sorted(
@@ -432,9 +514,18 @@ def _sync_treasury_vegetables(city: City) -> None:
 
 
 def drain_treasury_grain(city: City, amount: float) -> float:
-    """Drain `amount` from the city's grain stockpile (across granaries
-    largest-first). Returns the amount actually drained. Used by the
-    economy system for the monthly grain dole."""
+    """Drain `amount` from the city's grain stockpile, granaries first
+    (largest-first) and then wheat farms (largest-first) as a
+    fallback. Mirrors the meal pipeline's farm fallback: a city with
+    no granary can still pay the dole if there's grain in the fields,
+    which matches the player's mental model now that residences eat
+    from farms directly. Returns the amount actually drained.
+
+    Treasury sync at the end recomputes `treasury.grain` from
+    granaries only — farm buffers never get folded into the cached
+    aggregate, even when they covered part of the dole. The dole is
+    a one-shot drain, not a steady-state stock, so leaving farms out
+    of the cache keeps the rest of the economy honest."""
     drained = 0.0
     granaries = sorted(
         city.completed_of(BuildingKind.GRANARY),
@@ -450,5 +541,22 @@ def drain_treasury_grain(city: City, amount: float) -> float:
         remaining -= take
         if remaining <= 0:
             break
+    if remaining > 1e-9:
+        wheat_farms = sorted(
+            (
+                f for f in city.completed_of(BuildingKind.FARM)
+                if f.crop == int(Crop.WHEAT)
+            ),
+            key=lambda f: (-f.grain_stored, f.id),
+        )
+        for f in wheat_farms:
+            take = min(remaining, f.grain_stored)
+            if take <= 0:
+                continue
+            f.grain_stored -= take
+            drained += take
+            remaining -= take
+            if remaining <= 0:
+                break
     _sync_treasury_grain(city)
     return drained

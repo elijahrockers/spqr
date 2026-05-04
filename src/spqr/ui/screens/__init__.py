@@ -5,6 +5,7 @@ from .build_menu import (
 )
 from .config import ConfigResult, ConfigScreen
 from .info import GraphScreen, InfoResult, InfoScreen
+from .labor import LaborResult, LaborScreen
 from .population import PopulationScreen
 
 __all__ = [
@@ -16,5 +17,7 @@ __all__ = [
     "GraphScreen",
     "InfoResult",
     "InfoScreen",
+    "LaborResult",
+    "LaborScreen",
     "PopulationScreen",
 ]

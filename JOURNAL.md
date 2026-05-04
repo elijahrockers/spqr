@@ -5,6 +5,385 @@ new entries on top.
 
 ---
 
+## 2026-05-04 (follow-up) — Dole drains farms, unified meal schedule
+
+Two small follow-ups to the same-day session.
+
+- **Grain dole now drains farms after granaries.** Mirrors the meal
+  pipeline's farm fallback. Reported by playtest: a city with
+  residences + farms but no granary saw the meals work (plebs eat
+  off the field) but the monthly dole logged "could not be paid in
+  full." `drain_treasury_grain` now sorts wheat farms largest-first
+  after exhausting granaries; `_sync_treasury_grain` continues to
+  count granaries only, so the dole can pay from a farm without
+  inflating the cached `treasury.grain` aggregate. Two new tests in
+  `test_grain_farm_fallback.py` lock the behavior.
+- **All classes eat at 6am daily.** Patricians used to fire two
+  meals per day (12h interval, 9am offset, 0.60g each); they now
+  fire one meal at 6am for 1.20g — same daily intake (0.05/h × 24).
+  Plebs unchanged. Granary inventory drops in single steps per day
+  instead of one per class per period, which makes the staircase
+  inventory much more legible. Inspector display picks up the new
+  numbers automatically; no test changes needed.
+
+---
+
+## 2026-05-04 — Labor priority menu, eat-from-farms, escape clears tool
+
+Schema bumped 9 → 10 (new `City.labor_priority` field). No migration —
+old saves should fail loudly, per CLAUDE.md.
+
+### Labor priority (`l` hotkey)
+
+- New `LaborCategory` IntEnum on `building.py`: CONSTRUCTION (any
+  under-construction building), FARMS, LUMBER_MILLS, QUARRIES,
+  WORKSHOPS, OFFICES. Mapping lives in `_KIND_TO_LABOR_CATEGORY`
+  next to BuildingKind, and `labor_category_for(b)` is the single
+  source of truth for "what bucket is this building in?"
+- `City.labor_priority: list[int]` (msgspec field, default factory
+  copies `DEFAULT_LABOR_PRIORITY`). Stored as ints, not the enum,
+  to keep encode-byte stability — same rule as `Building.crop` and
+  `Building.good`. Default order: Construction, Farms, Lumber
+  mills, Quarries, Workshops, Offices.
+- `labor.step` refactored from a single placement-order pass into a
+  bucket sort: classify each building once, then drain the
+  workforce by bucket in `city.labor_priority` order. Within a
+  bucket, placement order (`district.building_ids`) still decides
+  ties — same determinism guarantee as before.
+- Behavior change worth noting: granaries, warehouses, residences,
+  forum, etc. don't sit in any LaborCategory and now always end up
+  at `workers_assigned == 0`. The previous code silently consumed
+  workers for granaries / forum (`WORKER_SLOTS[GRANARY] = 2`,
+  `WORKER_SLOTS[FORUM] = 2`), but no system actually read those
+  values, so the assignment was cosmetic. Freeing those slots
+  means slightly more effective workforce for the buckets the
+  player can actually steer.
+- New `SetLaborPriority` command. Validator requires the input to
+  be a permutation of LaborCategory ints 0..5; otherwise silently
+  drops the change. Mirrors `SetTaxRate` / `SetGrainDole` — change
+  drains via `apply_pending()` even while paused.
+
+### Labor screen (`ui/screens/labor.py`)
+
+- `LaborScreen(ModalScreen[LaborResult])` modeled on
+  `PopulationScreen` for the live-refresh pattern and
+  `ConfigScreen` for action-driven testability.
+- Header shows total workforce, assigned, idle. Body is a
+  reorderable priority list — one row per bucket, each row
+  displaying the live `assigned/total` slot count (computed by
+  walking `city.buildings` once per render via
+  `_category_assignments`).
+- Bindings: ↑/↓ move the cursor (`action_move_cursor`), `k`/`j`
+  reorder the highlighted row up/down (`action_reorder`),
+  escape/`l` close. Cursor follows a moved row so successive `j`
+  presses keep demoting the same bucket.
+- Dismiss behavior: returns `LaborResult(priority=None)` if the
+  player opened and closed without changes, else
+  `LaborResult(priority=<new list>)`. Suppressing no-op commands
+  keeps the log clean.
+
+### Eat-from-farms fallback (`grain.py`)
+
+- When a residence's meal isn't fully covered by in-reach granaries
+  + warehouses + cross-fill, `_drain_for_house` now falls through
+  to a third pass that drains in-reach farms directly. Wheat farms
+  feed grain; vegetable farms feed vegetables (only for
+  pleb-class meals — patricians stay grain-only).
+- New `_drain_from_farms` mirrors `_drain_from`. Reach uses
+  `FARM_TRANSPORT_REACH_COST` (16) — symmetric with how farms ship
+  to granaries today, so "farm reaches house" and "house reaches
+  farm" agree by construction. `farm_cov` is precomputed at the
+  top of `step` (parallel to `granary_cov` / `warehouse_cov`) and
+  threaded through `_consume → _serve_meal → _drain_for_house`.
+- **Treasury contract preserved**: `_sync_treasury_grain` /
+  `_sync_treasury_vegetables` continue to sum granaries /
+  warehouses only. Farm buffers stay out of `treasury.grain` /
+  `treasury.vegetables` — the dole and tax base read those cached
+  aggregates and would silently widen if farm buffers were folded
+  in. There's a regression test for this (`test_treasury_grain_
+  unchanged_by_farm_drain`).
+
+### Hotkey reshuffle and Vim-style escape
+
+- `l` is now Labor, `L` (capital) is Load. `s` (save) unchanged.
+- `app.action_cancel` cascades drag → range highlight → tool. The
+  third tier is new: with neither a drag nor a highlight active,
+  escape drops the build brush (`_zone_tool`) back to None.
+
+### Files touched
+
+- `src/spqr/sim/models/building.py` — `LaborCategory`,
+  `DEFAULT_LABOR_PRIORITY`, `_KIND_TO_LABOR_CATEGORY`,
+  `labor_category_for`.
+- `src/spqr/sim/models/__init__.py` — re-exports.
+- `src/spqr/sim/models/city.py` — `labor_priority` field.
+- `src/spqr/persistence/schema.py` — `SCHEMA_VERSION = 10`.
+- `src/spqr/sim/systems/labor.py` — bucket sort.
+- `src/spqr/sim/systems/grain.py` — farm fallback + `_drain_from_farms`.
+- `src/spqr/engine/commands.py` + `tick.py` + `__init__.py` —
+  `SetLaborPriority`.
+- `src/spqr/ui/screens/labor.py` — new modal.
+- `src/spqr/ui/screens/__init__.py` — re-exports.
+- `src/spqr/ui/app.py` — `l↔L`, `action_labor`,
+  `_on_labor_dismissed`, `action_cancel` third tier.
+- `tests/test_labor_priority.py`, `tests/test_grain_farm_fallback.py`,
+  `tests/test_labor_screen.py`, `tests/test_app_escape_clears_tool.py`
+  — new.
+
+---
+
+## 2026-05-03 — Demolition tools, fixed starter seed
+
+No schema bump — the new tools use existing fields (kind tombstones).
+
+### UNDESIGNATE / BULLDOZE
+- Two new `ZoneKind` values: UNDESIGNATE=9 (cancel under-construction
+  designation, free, 100% refund) and BULLDOZE=10 (demolish anything,
+  costs 10d per building, refunds 50% of timber+stone — denarii are
+  sunk into operations).
+- Added to the Infrastructure submenu: `r` Road, `u` Undesignate,
+  `z` Bulldoze. Cost-string override table handles tools that have
+  no `BUILDING_COST` entry — they show "free" and "10d" instead.
+- Engine routes `_place_zone_rect(kind=UNDESIGNATE|BULLDOZE)` to
+  dedicated `_undesignate_rect` / `_bulldoze_rect` helpers. Both
+  iterate the rect, dedupe by building id (so a 2×2 office with all
+  4 tiles in the rect is processed once), and dispatch to a shared
+  `_tombstone_building`.
+- Tombstone strategy: `b.kind = BuildingKind.EMPTY`, footprint tiles
+  cleared, district entry dropped. The slot stays in
+  `city.buildings` to preserve `tile.building_id` indexing — every
+  iterator already filters by kind, so EMPTY entries are invisible
+  to consumers.
+
+### Starter seed fix — residences out of nuisance range
+- The previous compact 6×3 starter put the lumber mill at column 5
+  and residences at columns 0..2 of row 2. Closest residence was
+  Chebyshev 3 from the mill — inside `INDUSTRIAL_NUISANCE_RADIUS=4`
+  — so two of three starter residences were stuck at huts from
+  tick zero.
+- Extended to 11×3 with industry at columns 9-10 (lumber mill +
+  quarry) and residences at columns 0-2. Closest residence to
+  industry is now Chebyshev 7 — well clear of the radius. Roads
+  span the full row to connect industry to the central cluster.
+- Added a quarry to the seeded layout since the player would
+  otherwise have to choose between mill and quarry from the start.
+- Test invariant: `test_default_seed_drops_starter_block` now
+  asserts every residence-to-industry pair is `>
+  INDUSTRIAL_NUISANCE_RADIUS` Chebyshev tiles apart.
+
+---
+
+## 2026-05-03 — Industrial nuisance, build sub-menus
+
+No schema bump — the new mechanics ride on existing fields.
+
+### Industrial nuisance
+- Residences within Chebyshev distance
+  `INDUSTRIAL_NUISANCE_RADIUS = 4` of any completed quarry or lumber
+  mill cap at huts (tier 1). The cap stacks with the existing
+  player-set `tier_cap` and the office-reach gate — whichever is
+  lowest wins.
+- Same residences drag district satisfaction down by
+  `INDUSTRIAL_NUISANCE_PENALTY_PER_MONTH = 0.04 × fraction-affected`
+  each month. Mirror of the road-desirability bonus, but subtractive.
+- Implementation: `_industrial_nuisance_tiles(city)` builds the set
+  once per month tick; `_upgrade_residences` and
+  `_apply_industrial_nuisance` both consume it. Tile-radius set,
+  not Dijkstra — smoke and noise carry through buildings.
+- Inspector flags residences in the zone with a "Near industry: yes
+  (caps at huts, drags satisfaction)" line so the player can see
+  why a residence isn't densifying.
+
+### Build menu sub-menus
+- `BuildMenuScreen` rewritten as a top-level chooser:
+  - `R` → Residence direct (single building)
+  - `p` → Production submenu (farm, granary, warehouse, lumber mill,
+    quarry, workshop, office)
+  - `i` → Infrastructure submenu (road; wells/gardens future)
+  - `0` → clear current tool
+- `BuildCategoryScreen(category, current)` shows the buildings in
+  one category. Each submenu's escape returns the current tool
+  unchanged so cancelling out doesn't accidentally lose the brush.
+- Top-level dismisses with `BuildMenuResult{kind: "tool"|"category"}`.
+  The App's `_on_build_menu_dismissed` either sets the brush
+  (`_set_zone_tool`) or pushes the matching category screen with
+  the same `_set_zone_tool` callback. Two-step nav, single tool sink.
+- Visual polish: bold bright_white headers, breadcrumb separator
+  (`BUILD » Production`), bright_yellow hotkeys, bright_white
+  building names, grey50 costs, bright_green "*" marker on the
+  current selection.
+
+### Hotkey rules carried forward
+- Build menu hotkey collisions resolved by category scoping: `r`
+  for Road only triggers in the infrastructure submenu; `f` for
+  Farm only in production. The category screen's action handler
+  walks its own option list and silently ignores keys from other
+  categories.
+
+---
+
+## 2026-05-03 — Workshop goods, office 2×2 footprint, inspector-from-any-tile
+
+Schema bumped to v9 (new `Building.good` field plus
+`Resources.furniture`/`stoneware`).
+
+### Workshop goods
+- New `Good` enum (FURNITURE=0, STONEWARE=1) parallel to `Crop`.
+- `Building.good: int = 0` field; defaults to furniture.
+- New `SetWorkshopGood(building_id, good)` command, ConfigScreen
+  workshop branch with `f`/`s` hotkeys.
+- Industry system extended: workshops consume input material
+  (timber for furniture, stone for stoneware) and produce output
+  into a new treasury aggregate. Halts entirely if treasury can't
+  cover one tick of input — no partial yields.
+- Constants: `WORKSHOP_INPUT_PER_WORKER_PER_TICK = 0.03`,
+  `WORKSHOP_OUTPUT_PER_WORKER_PER_TICK = 0.02` — workshops are net
+  consumers (waste is the difference). At 4 workers a workshop eats
+  ~86 timber/month and produces ~58 furniture/month, so one lumber
+  mill barely keeps up — players need to scale.
+- Furniture/stoneware have no consumer in MVP yet. They're a
+  visible signal that workshops are working; future iterations add
+  demand sinks.
+
+### Office 2×2 footprint
+- `OFFICE_FOOTPRINT_W = OFFICE_FOOTPRINT_H = 2`. The engine forces
+  the office to a 2×2 anchored at (x1, y1) regardless of the
+  PlaceZoneRect bounding box — a single Enter press places the
+  whole building.
+- All-or-nothing buildability: every footprint tile must pass
+  `City.is_buildable`, otherwise the placement is rejected with a
+  warning log. Cost is paid once.
+- Implementation choice: shared building_id across all four tiles
+  rather than separate per-tile shells. This makes the inspector
+  "just work" from any tile of the office (third user request) at
+  zero implementation cost — `tile.building_id` resolves to the
+  same office struct regardless of which corner the cursor lands
+  on.
+- UI: when the OFFICE tool is active, the map shows a green/red
+  2×2 footprint preview at the cursor. Green = all four tiles
+  buildable, red = at least one blocked. New `pending_footprint`
+  parameter on `_render_city`; the app computes it each frame
+  based on current cursor + zone tool.
+- App-level `action_place`: when zone_tool is OFFICE, fires
+  `PlaceZoneRect(cx, cy, cx, cy, OFFICE)` immediately rather than
+  starting a drag. Single-press flow.
+
+### Inspector
+- `_render_workshop` shows current good, what it consumes, per-tick
+  rate at current worker count, and the city's stock of the
+  produced good.
+- Office inspector unchanged — the shared-id trick makes it
+  automatic.
+
+---
+
+## 2026-05-03 — Office building, farm worker scaling, char hotkeys
+
+Three changes shipped together. Schema bumped to v8 for the new
+`BuildingKind.OFFICE` enum value.
+
+### Office building
+- New `BuildingKind.OFFICE` (id 12) and `ZoneKind.OFFICE` (id 8).
+  Cost: 80d/10t/10s. 3 worker slots, 2 builder slots, 240
+  build-hours.
+- Reach scales linearly: `OFFICE_REACH_PER_WORKER = 6.0` per worker.
+  An office with 1 worker covers ~a small neighborhood; with 3
+  workers it covers a district. An idle office (0 workers) covers
+  nothing — civic shell with no admin staff.
+- Cottage gate: `housing._upgrade_residences` now blocks tier 2
+  upgrades unless the residence sits in the coverage of at least one
+  completed, staffed office. Tier 1 (huts) and tier 3 (insula)
+  unchanged — the gate is specifically on the densification step.
+- Tax model: `economy._office_taxable_pops` computes the union of all
+  office coverages, then sums residence pop pro-rated by capacity
+  (same shape as the inspector's `_residence_occupancy`). Plebs and
+  patricians outside the union contribute 0. The grain dole stays
+  unaffected — it's a satisfaction expense, not a range gate.
+- Map glyph: `O` in bright_blue. Inspector shows reach
+  (workers × OFFICE_REACH_PER_WORKER) and flags idle offices in red.
+
+### Farm worker scaling
+- `CROP_WORKER_SLOTS[WHEAT]` 1 → 3, `CROP_WORKER_SLOTS[VEGETABLES]`
+  4 → 3 — uniform 3-worker cap across crops.
+- Existing maturity-advance math (`workers / hours_per_harvest`) gives
+  linear frequency scaling for free. 3 wheat workers ≈ 1 harvest per
+  10 days instead of 30; same 150 grain per harvest, so net 3× yearly
+  yield.
+- Vegetables: slight nerf (was 4 workers × 120h = ~5-day cycle,
+  now 3 × 160h ≈ ~7-day cycle), but still the faster-cycle crop.
+
+### Character hotkeys
+- Build menu: `f`/`R`/`g`/`o`/`w`/`r`/`W`/`L`/`Q` + `0` to clear.
+  First-letter mnemonics; capitals where the lowercase already maps
+  elsewhere (`R` because `r`=road, `W` because `w`=workshop, etc.).
+  Dropped the `q`-cancel binding since `Q` is now Quarry — `escape`
+  and `b` still cancel.
+- ConfigScreen: farm crop picker uses `w`=wheat, `v`=vegetables.
+  Residence tier-cap picker uses `u`/`h`/`o`/`i` for
+  undeveloped/huts/c**O**ttages/insula. The `o` (second letter)
+  avoids the `c`-close conflict.
+- `action_pick_index` (numeric dispatcher) replaced by
+  `action_pick_char`. Compatibility shim `action_pick_crop` still
+  works for tests that drive crop selection by Crop integer value.
+
+### Test gotcha — capital letter bindings
+- Verified at smoke time: Textual's `Binding("R", ...)` matches the
+  shifted-`a` keypress (terminal emits `R`). Capital and lowercase
+  letters are distinct bindings — using both in the build menu
+  doesn't cause spurious double-fire.
+
+---
+
+## 2026-05-03 — Markup leak fix, residence tier cap, occupancy bug
+
+Three changes shipped together. Schema bumped to v7 for the new
+Building.tier_cap field.
+
+### Rich markup leak in dialogs
+- The (c)onfigure modal was rendering literal text like
+  `[dim]escape / c to close[/]` — `[bright_yellow]Y[/]` for confirm,
+  etc. Cause: `Text.append("...[markup]...")` doesn't parse markup;
+  only `Text.from_markup` does. The append calls in the file treated
+  brackets as literal characters and the player saw them verbatim.
+- Same pattern was lurking in `info.py` (granary/farm/residence info
+  panels) — those just hadn't been noticed yet because the configure
+  dialog made it visible during this session.
+- Fix: replace every markup string with explicit `text.append(text,
+  style=...)` calls or split by-style. Added a
+  `_assert_no_markup_leaks` regression in `test_config_screen.py`
+  that scans rendered output for the literal substrings `[dim]`,
+  `[/]`, `[bright_yellow]`, `[bright_green]`, `[bold]`. New rule
+  documented in CLAUDE.md as an invariant.
+
+### Residence tier cap (player feature)
+- `Building.tier_cap: int = 3` field added; default = RESIDENCE_MAX_TIER
+  means uncapped. Schema bumped to v7 because Building's struct shape
+  changed (saved games before this won't load — fail-loud per MVP).
+- New command `SetResidenceTierCap(building_id, tier_cap)` clamps
+  to [0, RESIDENCE_MAX_TIER] and is a no-op for non-residence kinds.
+- Housing system's `_upgrade_residences` now uses
+  `min(RESIDENCE_MAX_TIER, b.tier_cap)` as the ceiling instead of the
+  global cap. Lowering the cap below the current tier prevents
+  further upgrades but never downgrades.
+- ConfigScreen extended: residence config lists all four tiers
+  (undeveloped/huts/cottages/insula) with their capacities; `0`-`3`
+  pick the cap. Hotkey dispatcher renamed to `action_pick_index`
+  and routes by building kind so the same number keys work for both
+  farm crop selection (0=wheat, 1=vegetables) and residence tier
+  caps. The old `action_pick_crop` is kept as a thin shim so existing
+  unit tests continue to drive crop selection directly.
+
+### Inspector occupancy bug (also fixed this session)
+- 5 plebs across 3 tier-0 residences rendered as 2/2/2 (each
+  formatted with `:.0f`, rounded independently), summing to 6 against
+  a status bar showing 5. Fixed via Hamilton's largest-remainder
+  allocation against `round(d.pops.plebs)` — per-residence integers
+  always sum to exactly the displayed district total. New
+  `tests/test_inspector.py` pins this with five regressions
+  (5/7.5/9/0 pops, plus stable-allocation).
+
+---
+
 ## 2026-05-03 — OO pass: methods on City/Building, slimmer engine
 
 Refactor only — no behavior change. Pre- and post-refactor determinism

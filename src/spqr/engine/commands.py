@@ -89,6 +89,16 @@ class SetWorkshopGood:
     good: int
 
 
+@dataclass(slots=True)
+class SetLaborPriority:
+    """Replace the player city's labor_priority list. `priority` must
+    be a permutation of LaborCategory values 0..5 (one entry per
+    bucket). Invalid input is silently dropped by the handler — the
+    UI never produces invalid input; this is a defense-in-depth gate
+    for replays / future load paths."""
+    priority: list[int]
+
+
 Command = (
     TogglePause
     | SetSpeed
@@ -99,4 +109,5 @@ Command = (
     | SetFarmCrop
     | SetResidenceTierCap
     | SetWorkshopGood
+    | SetLaborPriority
 )

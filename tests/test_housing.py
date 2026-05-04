@@ -6,10 +6,16 @@ huts and timber+stone for cottages/insulae."""
 from __future__ import annotations
 
 from spqr.bootstrap import new_game
-from spqr.engine.commands import PlaceZone, SetFarmCrop, ZoneKind
+from spqr.engine.commands import (
+    PlaceZone,
+    SetFarmCrop,
+    SetResidenceTierCap,
+    ZoneKind,
+)
 from spqr.engine.tick import Engine
 from spqr.engine.world import HOURS_PER_MONTH, HOURS_PER_WEEK
 from spqr.sim.models import (
+    RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_CAPACITY,
     RESIDENCE_TIER_UPGRADE_STONE_COST,
     RESIDENCE_TIER_UPGRADE_TIMBER_COST,
@@ -75,19 +81,24 @@ def test_no_migration_when_no_housing():
 
 
 def _designate_with_adjacent_road(eng, city):
-    """Helper: find a clear grass tile with a clear-grass neighbor to
-    the east, place a residence + adjacent road, return both."""
+    """Helper: find a row of clear grass at least 4 tiles wide with a
+    clear row beneath (for office 2×2 footprint extensions used by
+    callers that add an office east of the road). Place a residence +
+    adjacent road, return both."""
     res_xy = None
-    for y in range(1, city.height - 1):
-        for x in range(1, city.width - 1):
-            here = city.tile(x, y)
-            east = city.tile(x + 1, y)
-            if (
-                here.building_id == -1
-                and here.terrain == CityTerrain.GRASS
-                and east.building_id == -1
-                and east.terrain == CityTerrain.GRASS
-            ):
+    for y in range(1, city.height - 2):
+        for x in range(1, city.width - 4):
+            here_clear = all(
+                city.tile(x + dx, y).building_id == -1
+                and city.tile(x + dx, y).terrain == CityTerrain.GRASS
+                for dx in range(4)
+            )
+            below_clear = all(
+                city.tile(x + dx, y + 1).building_id == -1
+                and city.tile(x + dx, y + 1).terrain == CityTerrain.GRASS
+                for dx in range(4)
+            )
+            if here_clear and below_clear:
                 res_xy = (x, y)
                 break
         if res_xy:
@@ -150,16 +161,27 @@ def test_cottages_require_stone():
 
 
 def test_cottages_upgrade_when_stone_available():
+    """With timber, stone, road, AND a staffed office in reach, the
+    residence upgrades to cottages within two months. The office
+    requirement is the post-2026-05-03 cottage gate; without it the
+    residence would cap at huts."""
     state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
     city.treasury.denarii = 10_000.0
     city.treasury.timber = 200.0
     city.treasury.stone = 100.0
-    res, _road = _designate_with_adjacent_road(eng, city)
-    # Two months: tier 1 then tier 2.
+    res, road = _designate_with_adjacent_road(eng, city)
+    # Office two tiles east of the road, so its reach covers the
+    # residence (road extends Dijkstra reach cheaply).
+    eng.submit(PlaceZone(x=road.x + 1, y=road.y, kind=ZoneKind.OFFICE))
+    eng.step(1)
+    office = next(b for b in city.buildings if b.kind == BuildingKind.OFFICE)
+    office.completion = 1.0
+    office.workers_assigned = 3
     timber_before = city.treasury.timber
     stone_before = city.treasury.stone
+    # Two months: tier 1 then tier 2.
     eng.step(HOURS_PER_MONTH * 2)
     assert res.tier == 2
     timber_spent = (
@@ -174,7 +196,10 @@ def test_cottages_upgrade_when_stone_available():
     assert city.treasury.stone == stone_before - stone_spent
 
 
-def test_new_farm_defaults_to_wheat_with_one_worker_slot():
+def test_new_farm_defaults_to_wheat_with_three_worker_slots():
+    """Wheat farms now scale up to 3 workers (was 1). Frequency-only
+    yield scaling: more workers means more harvests per year, same
+    yield per harvest."""
     state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
@@ -183,7 +208,7 @@ def test_new_farm_defaults_to_wheat_with_one_worker_slot():
     eng.step(1)
     farm = next(b for b in city.buildings if b.kind == BuildingKind.FARM)
     assert farm.crop == int(Crop.WHEAT)
-    assert farm.farm_worker_slots() == 1
+    assert farm.farm_worker_slots() == 3
 
 
 def test_set_farm_crop_switches_and_resets_maturity():
@@ -200,7 +225,8 @@ def test_set_farm_crop_switches_and_resets_maturity():
     eng.step(1)
     assert farm.crop == int(Crop.VEGETABLES)
     assert farm.grain_maturity == 0.0
-    assert farm.farm_worker_slots() == 4
+    # Both crops cap at 3 workers now (uniform farm cap).
+    assert farm.farm_worker_slots() == 3
 
 
 def test_vegetables_farm_does_not_produce_grain():
@@ -292,3 +318,111 @@ def test_road_buff_scales_with_fraction_of_residences_in_reach():
     delta = d.satisfaction - 0.5
     expected = ROAD_DESIRABILITY_BONUS_PER_MONTH * 0.5
     assert abs(delta - expected) < 1e-6
+
+
+# --- Tier-cap configuration ------------------------------------------------
+
+def test_new_residence_defaults_to_uncapped():
+    """Newly-designated residences should default to tier_cap =
+    RESIDENCE_MAX_TIER, i.e. no upgrade ceiling."""
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    spot = find_clear_grass(city)
+    eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    res = next(b for b in city.buildings if b.kind == BuildingKind.RESIDENCE)
+    assert res.tier_cap == RESIDENCE_MAX_TIER
+
+
+def test_set_residence_tier_cap_command_clamps_and_applies():
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    spot = find_clear_grass(city)
+    eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.RESIDENCE))
+    eng.step(1)
+    res = next(b for b in city.buildings if b.kind == BuildingKind.RESIDENCE)
+    eng.submit(SetResidenceTierCap(building_id=res.id, tier_cap=1))
+    eng.step(1)
+    assert res.tier_cap == 1
+    # Out-of-range values clamp to [0, RESIDENCE_MAX_TIER].
+    eng.submit(SetResidenceTierCap(building_id=res.id, tier_cap=99))
+    eng.step(1)
+    assert res.tier_cap == RESIDENCE_MAX_TIER
+    eng.submit(SetResidenceTierCap(building_id=res.id, tier_cap=-5))
+    eng.step(1)
+    assert res.tier_cap == 0
+
+
+def test_set_residence_tier_cap_ignored_for_non_residence():
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    handles = bootstrap_starter_city(state, eng)
+    farm = handles["farm"]
+    farm.tier_cap = RESIDENCE_MAX_TIER  # baseline
+    eng.submit(SetResidenceTierCap(building_id=farm.id, tier_cap=1))
+    eng.step(1)
+    # Farm's tier_cap stays at the default — command is a no-op for
+    # non-residence kinds.
+    assert farm.tier_cap == RESIDENCE_MAX_TIER
+
+
+def test_housing_respects_tier_cap_at_huts():
+    """A residence capped at tier 1 (huts) should upgrade once and then
+    stop, even with materials and a road sitting around for further
+    upgrades."""
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    city.treasury.denarii = 10_000.0
+    city.treasury.timber = 200.0
+    city.treasury.stone = 100.0
+    res, _road = _designate_with_adjacent_road(eng, city)
+    res.tier_cap = 1
+    # Three months: would normally reach tier 2 by month 2 and tier 3
+    # by month 3, but the cap should hold it at huts.
+    eng.step(HOURS_PER_MONTH * 3)
+    assert res.tier == 1
+
+
+def test_housing_respects_tier_cap_at_undeveloped():
+    """tier_cap = 0 freezes a residence at undeveloped — the player
+    explicitly never wants this plot to densify."""
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    city.treasury.denarii = 10_000.0
+    city.treasury.timber = 200.0
+    city.treasury.stone = 100.0
+    res, _road = _designate_with_adjacent_road(eng, city)
+    res.tier_cap = 0
+    eng.step(HOURS_PER_MONTH * 3)
+    assert res.tier == 0
+
+
+def test_lowering_cap_below_tier_does_not_downgrade():
+    """Lowering the cap below the current tier prevents future
+    upgrades but does NOT demolish existing tier — a tier-2 cottage
+    capped at tier 1 stays as cottages.
+
+    Needs a staffed office in reach so cottages are reachable in the
+    first two months."""
+    state = new_game(seed=42, seed_starter=False)
+    eng = Engine(state, default_systems())
+    city = state.player_city()
+    city.treasury.denarii = 10_000.0
+    city.treasury.timber = 200.0
+    city.treasury.stone = 100.0
+    res, road = _designate_with_adjacent_road(eng, city)
+    eng.submit(PlaceZone(x=road.x + 1, y=road.y, kind=ZoneKind.OFFICE))
+    eng.step(1)
+    office = next(b for b in city.buildings if b.kind == BuildingKind.OFFICE)
+    office.completion = 1.0
+    office.workers_assigned = 3
+    eng.step(HOURS_PER_MONTH * 2)  # reaches tier 2
+    assert res.tier == 2
+    # Now cap below current tier.
+    eng.submit(SetResidenceTierCap(building_id=res.id, tier_cap=1))
+    eng.step(HOURS_PER_MONTH * 2)  # would otherwise reach tier 3
+    assert res.tier == 2  # unchanged: no downgrade, no further upgrade

@@ -16,8 +16,10 @@ from spqr.sim.models import (
     GRANARY_CAPACITY,
     GROWING_SEASON_MONTHS,
     INDUSTRIAL_NUISANCE_RADIUS,
+    LUMBER_MILL_TIMBER_BUFFER,
     LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK,
     OFFICE_REACH_PER_WORKER,
+    QUARRY_STONE_BUFFER,
     QUARRY_STONE_PER_WORKER_PER_TICK,
     RESIDENCE_MAX_TIER,
     RESIDENCE_TIER_NAME,
@@ -210,11 +212,29 @@ def _render_industry(text: Text, city: City, b) -> None:  # type: ignore[no-unty
     text.append(f"  ({rate:.2f}×{b.workers_assigned})\n", style="grey50")
     stored = city.stored_materials()
     cap = city.total_storage_capacity()
-    text.append("Storage:    ", style="grey70")
-    over_cap = stored >= cap
-    color = "red" if over_cap else "white"
-    text.append(f"{stored:.0f} / {cap}", style=color)
-    if over_cap:
+    text.append("City store: ", style="grey70")
+    treasury_full = stored >= cap
+    color = "yellow" if treasury_full else "white"
+    text.append(f"{stored:.0f} / {cap}\n", style=color)
+    # Local buffer line — visible only on mills/quarries. Tells the
+    # player how much material is sitting on the building waiting
+    # for a warehouse (or being drawn down by construction).
+    buffer_amount = b.timber_stored if is_mill else b.stone_stored
+    buffer_cap = (
+        LUMBER_MILL_TIMBER_BUFFER if is_mill else QUARRY_STONE_BUFFER
+    )
+    text.append("On-site:    ", style="grey70")
+    buffer_full = buffer_amount >= buffer_cap - 1e-6
+    bcolor = (
+        "red" if treasury_full and buffer_full
+        else "yellow" if buffer_amount > 0
+        else "grey50"
+    )
+    text.append(
+        f"{buffer_amount:.0f} / {int(buffer_cap)} {output}",
+        style=bcolor,
+    )
+    if treasury_full and buffer_full:
         text.append("  (production halted)", style="red")
     text.append("\n")
 

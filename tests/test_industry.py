@@ -13,17 +13,26 @@ from spqr.sim.models import (
     LUMBER_MILL_TIMBER_PER_WORKER_PER_TICK,
     QUARRY_STONE_PER_WORKER_PER_TICK,
     BuildingKind,
+    CityTerrain,
 )
 from spqr.sim.systems import default_systems
 
-from ._helpers import find_clear_grass
+from ._helpers import find_clear_grass, find_clear_grass_adjacent_to
+
+
+def _adjacency_for(kind: ZoneKind) -> set[CityTerrain]:
+    if kind == ZoneKind.LUMBER_MILL:
+        return {CityTerrain.FOREST}
+    if kind == ZoneKind.QUARRY:
+        return {CityTerrain.HILL, CityTerrain.ROCK}
+    raise ValueError(f"no adjacency rule for {kind}")
 
 
 def _designate_and_finish(eng, city, kind: ZoneKind, plebs: float = 50.0):
     """Designate one mill or quarry, hand-finish it, and seed labor.
     Caller is responsible for treasury — this helper only pays the
     designation cost; it does NOT reset stocks afterward."""
-    spot = find_clear_grass(city)
+    spot = find_clear_grass_adjacent_to(city, _adjacency_for(kind))
     eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=kind))
     eng.step(1)
     b = next(
@@ -63,7 +72,15 @@ def test_lumber_mill_produces_timber_when_workers_assigned():
     eng.step(1)
     warehouse = next(b for b in city.buildings if b.kind == BuildingKind.WAREHOUSE)
     warehouse.completion = 1.0
-    mill = _designate_and_finish(eng, city, ZoneKind.LUMBER_MILL)
+    used = {(spot[0], spot[1])}
+    mill_spot = find_clear_grass_adjacent_to(
+        city, {CityTerrain.FOREST}, exclude=used,
+    )
+    eng.submit(PlaceZone(x=mill_spot[0], y=mill_spot[1], kind=ZoneKind.LUMBER_MILL))
+    eng.step(1)
+    mill = next(b for b in city.buildings if b.kind == BuildingKind.LUMBER_MILL)
+    mill.completion = 1.0
+    city.districts[0].pops.plebs = 50.0
     # Now drop treasury so production has headroom under the cap (250).
     city.treasury.timber = 0.0
     city.treasury.stone = 0.0
@@ -85,7 +102,15 @@ def test_quarry_produces_stone_when_workers_assigned():
     eng.step(1)
     warehouse = next(b for b in city.buildings if b.kind == BuildingKind.WAREHOUSE)
     warehouse.completion = 1.0
-    quarry = _designate_and_finish(eng, city, ZoneKind.QUARRY)
+    used = {(spot[0], spot[1])}
+    quarry_spot = find_clear_grass_adjacent_to(
+        city, {CityTerrain.HILL, CityTerrain.ROCK}, exclude=used,
+    )
+    eng.submit(PlaceZone(x=quarry_spot[0], y=quarry_spot[1], kind=ZoneKind.QUARRY))
+    eng.step(1)
+    quarry = next(b for b in city.buildings if b.kind == BuildingKind.QUARRY)
+    quarry.completion = 1.0
+    city.districts[0].pops.plebs = 50.0
     city.treasury.timber = 0.0
     city.treasury.stone = 0.0
     eng.step(50)
@@ -94,14 +119,16 @@ def test_quarry_produces_stone_when_workers_assigned():
     assert city.treasury.stone >= expected_min
 
 
-def test_industry_halts_when_at_storage_cap():
+def test_industry_treasury_doesnt_grow_at_storage_cap():
+    """Without warehouse/forum, the city treasury can't accept new
+    timber — it's already over the cap = 0. Production now spills
+    into the mill's local buffer instead of being lost, but the
+    treasury aggregate stays put."""
     state = new_game(seed=42, seed_starter=False)
     eng = Engine(state, default_systems())
     city = state.player_city()
-    # No forum / warehouse → cap is 0. Mill should produce nothing
-    # because starter timber (80) + stone (40) is already over cap.
     city.treasury.denarii = 10_000.0
-    spot = find_clear_grass(city)
+    spot = find_clear_grass_adjacent_to(city, {CityTerrain.FOREST})
     eng.submit(PlaceZone(x=spot[0], y=spot[1], kind=ZoneKind.LUMBER_MILL))
     eng.step(1)
     mill = next(b for b in city.buildings if b.kind == BuildingKind.LUMBER_MILL)

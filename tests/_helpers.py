@@ -29,6 +29,55 @@ def find_clear_grass(city, exclude: set[tuple[int, int]] | None = None) -> tuple
     raise RuntimeError("no clear grass tile found")
 
 
+def find_clear_grass_adjacent_to(
+    city,
+    terrains: set[CityTerrain],
+    exclude: set[tuple[int, int]] | None = None,
+) -> tuple[int, int]:
+    """First (x, y) that's empty grass with at least one orthogonally
+    adjacent tile in `terrains`. Used for placing lumber mills (next
+    to forest) and quarries (next to hill/rock) in tests, since the
+    engine now enforces the adjacency rule on player placements."""
+    exclude = exclude or set()
+    for y in range(city.height):
+        for x in range(city.width):
+            if (x, y) in exclude:
+                continue
+            t = city.tile(x, y)
+            if t.building_id != -1 or t.terrain != CityTerrain.GRASS:
+                continue
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nx, ny = x + dx, y + dy
+                if not city.in_bounds(nx, ny):
+                    continue
+                if city.tile(nx, ny).terrain in terrains:
+                    return x, y
+    raise RuntimeError(
+        f"no clear grass tile adjacent to {terrains} found"
+    )
+
+
+def paint_adjacent_terrain(
+    city, x: int, y: int, terrain: CityTerrain,
+) -> None:
+    """Force one orthogonally-adjacent tile of (x, y) to `terrain`,
+    so the engine's mill/quarry adjacency check passes when the
+    test wants a building at a specific spot. Picks the first
+    adjacent in-bounds tile that isn't already a building or
+    something the test cares about. Test-only — mutates the
+    procgen-frozen tilemap directly."""
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        nx, ny = x + dx, y + dy
+        if not city.in_bounds(nx, ny):
+            continue
+        t = city.tile(nx, ny)
+        if t.building_id != -1:
+            continue
+        t.terrain = terrain
+        return
+    raise RuntimeError(f"no free neighbor for ({x},{y}) to paint")
+
+
 def bootstrap_starter_city(
     state: GameState,
     eng: Engine,

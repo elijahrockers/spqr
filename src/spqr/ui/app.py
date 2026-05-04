@@ -26,6 +26,7 @@ from spqr.ui.screens.build_menu import (
 )
 from spqr.ui.screens.config import ConfigResult, ConfigScreen
 from spqr.ui.screens.info import GraphScreen, InfoResult, InfoScreen
+from spqr.ui.screens.labor import LaborResult, LaborScreen
 from spqr.ui.screens.population import PopulationScreen
 from spqr.ui.widgets.inspector import Inspector
 from spqr.ui.widgets.log_panel import LogPanel
@@ -76,7 +77,8 @@ class SpqrApp(App):
         Binding("enter", "place", "Place / commit drag"),
         Binding("escape", "cancel", "Cancel"),
         Binding("s", "save", "Save"),
-        Binding("l", "load", "Load"),
+        Binding("l", "labor", "Labor"),
+        Binding("L", "load", "Load"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -247,6 +249,19 @@ class SpqrApp(App):
     def action_population(self) -> None:
         self.push_screen(PopulationScreen(self.engine.state))
 
+    def action_labor(self) -> None:
+        self.push_screen(
+            LaborScreen(self.engine.state),
+            self._on_labor_dismissed,
+        )
+
+    def _on_labor_dismissed(self, result: LaborResult | None) -> None:
+        if result is None or result.priority is None:
+            return
+        from spqr.engine.commands import SetLaborPriority
+
+        self.engine.submit(SetLaborPriority(result.priority))
+
     def action_info(self) -> None:
         if self._city_map is None or self.view_mode != "city":
             return
@@ -343,12 +358,18 @@ class SpqrApp(App):
             self._city_map.refresh()
 
     def action_cancel(self) -> None:
-        """Escape: cancels in this priority — drag, then range highlight."""
+        """Escape: cancels in this priority — drag, then range
+        highlight, then the active build tool. Clearing the tool last
+        gives the player a Vim-style reset; with neither a drag nor a
+        highlight in the way, escape drops the brush back to nothing."""
         if self._drag_anchor is not None:
             self.action_cancel_drag()
             return
         if self._range_highlight is not None:
             self._clear_range_highlight()
+            return
+        if self._zone_tool is not None:
+            self._set_zone_tool(None)
 
     def action_place(self) -> None:
         if self._zone_tool is None or self._city_map is None:
